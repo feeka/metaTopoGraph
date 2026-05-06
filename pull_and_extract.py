@@ -360,12 +360,22 @@ def _probe_fasterq_flags() -> str:
 def _truncate_fastq(path: str, max_reads: int):
     """Keep only the first max_reads reads in a (possibly gzipped) FASTQ."""
     max_lines = max_reads * 4
-    opener_r = gzip.open if path.endswith(".gz") else open
     tmp = path + ".tmp"
+    if not path.endswith(".gz") and sys.platform != "win32":
+        # Plain .fastq on Linux: head -n is vastly faster than Python I/O
+        rc = subprocess.call(
+            ["head", "-n", str(max_lines), path],
+            stdout=open(tmp, "w")
+        )
+        if rc == 0 or rc == 141:  # 141 = SIGPIPE (normal for head)
+            os.replace(tmp, path)
+            return
+        # head failed for some reason, fall through to Python path
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    opener_r = gzip.open if path.endswith(".gz") else open
     opener_w = gzip.open if path.endswith(".gz") else open
-    mode_r = "rt"
-    mode_w = "wt"
-    with opener_r(path, mode_r) as fin, opener_w(tmp, mode_w) as fout:
+    with opener_r(path, "rt") as fin, opener_w(tmp, "wt") as fout:
         for i, line in enumerate(fin):
             if i >= max_lines:
                 break
