@@ -35,7 +35,10 @@ void WriteFeatures(const TopoFeatures& f, const std::string& output_path) {
     out << "    \"mean_tip_length\": "           << f.walk.mean_tip_length           << ",\n";
     out << "    \"bubble_density\": "            << f.walk.bubble_density            << ",\n";
     out << "    \"error_bubble_fraction\": "     << f.walk.error_bubble_fraction     << ",\n";
-    out << "    \"balanced_bubble_fraction\": "  << f.walk.balanced_bubble_fraction  << "\n";
+    out << "    \"balanced_bubble_fraction\": "  << f.walk.balanced_bubble_fraction  << ",\n";
+    out << "    \"n_tips_walked\": "             << f.walk.n_tips_walked             << ",\n";
+    out << "    \"n_branching_sampled\": "       << f.walk.n_branching_sampled       << ",\n";
+    out << "    \"n_bubbles_found\": "           << f.walk.n_bubbles_found           << "\n";
     out << "  },\n";
 
     out << "  \"timing\": {\n";

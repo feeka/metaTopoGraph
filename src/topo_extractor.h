@@ -15,9 +15,17 @@ struct ExtractionOptions {
 
 // Intermediate result for the bubble extraction phase.
 struct BubbleFeatures {
-    double bubble_density;           // bubbles / sampled branching edges
-    double error_bubble_fraction;    // fraction where mult ratio > 5
-    double balanced_bubble_fraction; // fraction where ratio < 2 and both > valley
+    double   bubble_density;           // bubbles / sampled branching edges
+    double   error_bubble_fraction;    // fraction where mult ratio > 5
+    double   balanced_bubble_fraction; // fraction where ratio < 2 and both > valley
+    uint64_t n_branching_sampled;      // branching edges visited
+    uint64_t n_bubbles_found;          // converging pairs confirmed
+};
+
+// Result of the tip-walk phase.
+struct TipWalkResult {
+    double   mean_tip_length; // mean walk length in edges
+    uint64_t n_tips_walked;   // number of tip edges used
 };
 
 // --- Phase 1: histogram features (features 1-8) ---
@@ -27,8 +35,8 @@ HistogramFeatures ExtractHistogramFeatures(SDBG& dbg);
 NodeFeatures ExtractNodeFeatures(SDBG& dbg, const ExtractionOptions& opts);
 
 // --- Phase 3: tip walk (feature 15) ---
-// Returns mean tip length in edges over all sampled tip edges.
-double ExtractMeanTipLength(SDBG& dbg, const ExtractionOptions& opts);
+// Returns mean tip length and the raw tip count.
+TipWalkResult ExtractMeanTipLength(SDBG& dbg, const ExtractionOptions& opts);
 
 // --- Phase 4: bubble detection (features 16-18) ---
 // valley_position is the histogram valley computed in phase 1; used to

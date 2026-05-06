@@ -26,10 +26,13 @@ struct NodeFeatures {
 
 // Features derived from bounded local walks (features 15-18).
 struct WalkFeatures {
-    double mean_tip_length;          // mean walk length from sampled tip edges
-    double bubble_density;           // bubbles found per sampled branching edge
-    double error_bubble_fraction;    // bubble fraction where mult ratio > 5
-    double balanced_bubble_fraction; // bubble fraction where ratio < 2 and both > valley
+    double   mean_tip_length;          // mean walk length from sampled tip edges
+    double   bubble_density;           // bubbles found per sampled branching edge
+    double   error_bubble_fraction;    // bubble fraction where mult ratio > 5
+    double   balanced_bubble_fraction; // bubble fraction where ratio < 2 and both > valley
+    uint64_t n_tips_walked;            // raw count: tip edges walked in phase 3
+    uint64_t n_branching_sampled;      // raw count: branching edges visited in phase 4
+    uint64_t n_bubbles_found;          // raw count: converging pairs confirmed in phase 4
 };
 
 // Wall-clock timing for each extraction phase (milliseconds).

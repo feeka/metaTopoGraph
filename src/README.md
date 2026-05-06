@@ -19,7 +19,7 @@ the raw counts to smooth noise before valley/mode detection.
 
 | # | Field | Formula / Method |
 |---|-------|-----------------|
-| 1 | `valley_position` | argmin of the smoothed histogram in the range [2, min(50, rough_peak/2)] where *rough_peak* is the argmax of the smoothed histogram for multiplicity ≥ 10. This dynamic upper bound prevents a fixed cutoff from placing the valley inside the signal peak for high-coverage samples. |
+| 1 | `valley_position` | argmin of the smoothed histogram in the range [2, max(50, rough_peak/2)] where *rough_peak* is the argmax of the smoothed histogram for multiplicity ≥ 10. The floor of 50 prevents the search from stopping too early at moderate coverage; the half-peak heuristic is an empirical guess with no theoretical basis. |
 | 2 | `valley_depth` | `smoothed[valley_pos] / smoothed[1]`. Measures how clearly the error–signal dip separates the two populations. Values near 0 indicate a clean separation; values near 1 indicate no visible valley. |
 | 3 | `mult_1_fraction` | `hist[1] / total_edges`. Raw fraction; computed directly from the unsmoothed histogram before Gaussian smoothing. |
 | 4 | `mean_node_multiplicity` | `Σ(i · hist[i]) / total` for i = 1..1000. Weighted mean of the raw histogram. |

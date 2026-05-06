@@ -253,8 +253,13 @@ def get_ena_fastq_urls(acc: str) -> list:
         lines = [l for l in text.strip().split("\n") if l]
         if len(lines) < 2:
             return []
-        # Data row: fastq_ftp column is semicolon-separated ftp paths
-        ftp_field = lines[1].split("\t")[0]
+        # ENA always returns run_accession as column 0; find fastq_ftp by header name
+        headers = lines[0].split("\t")
+        try:
+            col_idx = headers.index("fastq_ftp")
+        except ValueError:
+            return []
+        ftp_field = lines[1].split("\t")[col_idx]
         urls = []
         for raw in ftp_field.split(";"):
             raw = raw.strip()

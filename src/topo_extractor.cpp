@@ -50,18 +50,12 @@ struct BubbleResult {
     double mult1;   // representative multiplicity of branch 1
 };
 
-// Advance one step along a branch: take the first valid outgoing edge.
-// Unlike UniqueNextEdge, this does NOT require the target to have out-degree 1,
-// so it crosses merge nodes that are also branch points.
-static uint64_t FirstOutgoingEdge(SDBG& dbg, uint64_t edge_id) {
-    uint64_t outgoings[8];
-    int od = dbg.OutgoingEdges(edge_id, outgoings);
-    return od > 0 ? outgoings[0] : SDBG::kNullID;
-}
-
 // Walk two branches from a branching edge's two outgoing edges.
 // Convergence: Forward(cur0) == Forward(cur1) means both edges target the
 // same node (Forward returns the unique last-edge-of-node identifier).
+// Aborts if either cursor reaches a node with out-degree != 1: a real bubble
+// has strictly linear paths between source and sink, so any mid-walk branch
+// means we are not looking at a simple bubble.
 static BubbleResult WalkBranchPair(SDBG& dbg,
                                    uint64_t branch0, uint64_t branch1,
                                    uint64_t max_depth) {
@@ -76,11 +70,15 @@ static BubbleResult WalkBranchPair(SDBG& dbg,
         if (dbg.Forward(cur0) == dbg.Forward(cur1))
             return {true, mult0, mult1};
 
-        uint64_t next0 = FirstOutgoingEdge(dbg, cur0);
-        uint64_t next1 = FirstOutgoingEdge(dbg, cur1);
-        if (next0 == SDBG::kNullID || next1 == SDBG::kNullID) break;
-        cur0 = next0;
-        cur1 = next1;
+        uint64_t outs0[8], outs1[8];
+        int od0 = dbg.OutgoingEdges(cur0, outs0);
+        int od1 = dbg.OutgoingEdges(cur1, outs1);
+
+        // Abort if either path hits a branching node or a dead-end mid-walk.
+        if (od0 != 1 || od1 != 1) break;
+
+        cur0 = outs0[0];
+        cur1 = outs1[0];
     }
     return {false, 0.0, 0.0};
 }
@@ -175,9 +173,14 @@ HistogramFeatures ExtractHistogramFeatures(SDBG& dbg) {
     }
     hf.valley_position = valley_pos;
 
-    // Feature 2 — valley_depth = count_at_valley / count_at_error_peak
+    // Feature 2 — valley_depth = count_at_valley / max(smoothed[1..valley_pos]).
+    // Using the actual smoothed peak in [1, valley_pos) rather than just smoothed[1]
+    // because the error-read peak may not fall exactly at multiplicity 1.
     {
-        double error_peak = smoothed[1] > 0.0 ? smoothed[1] : 1.0;
+        double error_peak = smoothed[1];
+        for (uint32_t i = 2; i < valley_pos; ++i)
+            if (smoothed[i] > error_peak) error_peak = smoothed[i];
+        if (error_peak <= 0.0) error_peak = 1.0;
         hf.valley_depth = valley_val / error_peak;
     }
 
@@ -310,7 +313,8 @@ double ExtractMeanTipLength(SDBG& dbg, const ExtractionOptions& opts) {
         total_steps += length;
     }
 
-    return n_tips > 0 ? static_cast<double>(total_steps) / n_tips : 0.0;
+    return {n_tips > 0 ? static_cast<double>(total_steps) / n_tips : 0.0,
+            n_tips};
 }
 
 // ---------------------------------------------------------------------------
@@ -378,6 +382,8 @@ BubbleFeatures ExtractBubbleFeatures(SDBG& dbg,
         n_bubbles > 0 ? static_cast<double>(n_error)    / n_bubbles : 0.0;
     bf.balanced_bubble_fraction =
         n_bubbles > 0 ? static_cast<double>(n_balanced) / n_bubbles : 0.0;
+    bf.n_branching_sampled = n_branching;
+    bf.n_bubbles_found     = n_bubbles;
     return bf;
 }
 
@@ -400,7 +406,11 @@ TopoFeatures RunExtraction(SDBG& dbg, const ExtractionOptions& opts) {
     tf.node = ExtractNodeFeatures(dbg, opts);
     auto t2 = Clock::now();
 
-    tf.walk.mean_tip_length = ExtractMeanTipLength(dbg, opts);
+    {
+        TipWalkResult tw = ExtractMeanTipLength(dbg, opts);
+        tf.walk.mean_tip_length = tw.mean_tip_length;
+        tf.walk.n_tips_walked   = tw.n_tips_walked;
+    }
     auto t3 = Clock::now();
 
     {
@@ -408,6 +418,8 @@ TopoFeatures RunExtraction(SDBG& dbg, const ExtractionOptions& opts) {
         tf.walk.bubble_density           = bf.bubble_density;
         tf.walk.error_bubble_fraction    = bf.error_bubble_fraction;
         tf.walk.balanced_bubble_fraction = bf.balanced_bubble_fraction;
+        tf.walk.n_branching_sampled      = bf.n_branching_sampled;
+        tf.walk.n_bubbles_found          = bf.n_bubbles_found;
     }
     auto t4 = Clock::now();
 
