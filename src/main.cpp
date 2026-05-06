@@ -52,18 +52,38 @@ static std::string GetBinaryDir(const char* argv0) {
     return sep == std::string::npos ? std::string(".") : p.substr(0, sep);
 }
 
-// Find megahit_core_no_hw_accel or megahit_core next to this binary.
+// Find megahit_core_no_hw_accel or megahit_core.
+// Search order: next to this binary, then every directory in PATH.
 static std::string FindMegahitCore(const std::string& bin_dir) {
 #ifdef _WIN32
     const char* ext = ".exe";
+    const char  path_sep = ';';
 #else
     const char* ext = "";
+    const char  path_sep = ':';
 #endif
     const char* names[] = {"megahit_core_no_hw_accel", "megahit_core", nullptr};
-    for (int i = 0; names[i]; ++i) {
-        std::string path = bin_dir + PATH_SEP + names[i] + ext;
-        FILE* f = fopen(path.c_str(), "rb");
-        if (f) { fclose(f); return path; }
+
+    // Build search directories: binary dir first, then PATH entries.
+    std::vector<std::string> dirs;
+    dirs.push_back(bin_dir);
+    const char* env_path = getenv("PATH");
+    if (env_path) {
+        std::string p(env_path);
+        std::string::size_type start = 0, end;
+        while ((end = p.find(path_sep, start)) != std::string::npos) {
+            dirs.push_back(p.substr(start, end - start));
+            start = end + 1;
+        }
+        dirs.push_back(p.substr(start));
+    }
+
+    for (const std::string& dir : dirs) {
+        for (int i = 0; names[i]; ++i) {
+            std::string path = dir + PATH_SEP + names[i] + ext;
+            FILE* f = fopen(path.c_str(), "rb");
+            if (f) { fclose(f); return path; }
+        }
     }
     return "";
 }
