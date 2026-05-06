@@ -80,6 +80,22 @@ DEFAULT_MAX_SPOTS = 3_000_000  # paired spots -> ~900 MB at 150 bp PE
 ESEARCH  = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 ESUMMARY = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
 
+# Seconds to wait between NCBI API calls.
+# Without an API key NCBI allows 3 req/s; with a key 10 req/s.
+# We use a conservative 0.4 s (2.5 req/s) to stay safely under the limit.
+_NCBI_API_KEY: str = ""       # set by --ncbi-api-key or NCBI_API_KEY env var
+_NCBI_SLEEP:   float = 0.4    # overridden to 0.12 when an API key is provided
+
+
+def _ncbi_get(url: str, params: dict) -> bytes:
+    """GET an NCBI E-utilities URL with rate limiting and optional API key."""
+    if _NCBI_API_KEY:
+        params["api_key"] = _NCBI_API_KEY
+    full_url = f"{url}?{urllib.parse.urlencode(params)}"
+    time.sleep(_NCBI_SLEEP)
+    with urllib.request.urlopen(full_url, timeout=30) as r:
+        return r.read()
+
 
 # ---------------------------------------------------------------------------
 # SRA accession resolution (live NCBI query, no hard-coded IDs)
@@ -92,15 +108,13 @@ def resolve_accession(query: str) -> tuple:
     Returns (None, None, None) on any failure.
     """
     # Step 1: get UIDs matching the query
-    search_params = urllib.parse.urlencode({
-        "db":      "sra",
-        "term":    query,
-        "retmax":  "20",
-        "retmode": "json",
-    })
     try:
-        with urllib.request.urlopen(f"{ESEARCH}?{search_params}", timeout=30) as r:
-            uids = json.loads(r.read())["esearchresult"]["idlist"]
+        uids = json.loads(_ncbi_get(ESEARCH, {
+            "db":      "sra",
+            "term":    query,
+            "retmax":  "20",
+            "retmode": "json",
+        }))["esearchresult"]["idlist"]
     except Exception as exc:
         print(f"  [WARN] NCBI esearch failed: {exc}", flush=True)
         return None, None, None
@@ -110,14 +124,12 @@ def resolve_accession(query: str) -> tuple:
         return None, None, None
 
     # Step 2: fetch summaries and pick the first run with usable size
-    sum_params = urllib.parse.urlencode({
-        "db":      "sra",
-        "id":      ",".join(uids),
-        "retmode": "json",
-    })
     try:
-        with urllib.request.urlopen(f"{ESUMMARY}?{sum_params}", timeout=30) as r:
-            sums = json.loads(r.read())
+        sums = json.loads(_ncbi_get(ESUMMARY, {
+            "db":      "sra",
+            "id":      ",".join(uids),
+            "retmode": "json",
+        }))
     except Exception as exc:
         print(f"  [WARN] NCBI esummary failed: {exc}", flush=True)
         return None, None, None
@@ -225,15 +237,20 @@ def download_accession(acc: str, fastq_dir: str, max_spots: int,
                         threads: int, use_fasterq: bool) -> bool:
     os.makedirs(fastq_dir, exist_ok=True)
     if use_fasterq:
+        # fasterq-dump does not have --maxSpotCount; use -N/-X to cap the
+        # spot range (1-based start/stop).  --split-3 puts paired reads in
+        # <acc>_1.fastq and <acc>_2.fastq, singletons in <acc>.fastq.
         cmd = ["fasterq-dump", acc,
-               "--outdir", fastq_dir,
+               "--outdir",  fastq_dir,
                "--split-3",
                "--threads", str(threads),
-               "--maxSpotCount", str(max_spots),
+               "-N", "1",
+               "-X", str(max_spots),
                "--progress"]
     else:
+        # fastq-dump (legacy) does have --maxSpotCount
         cmd = ["fastq-dump", acc,
-               "--outdir", fastq_dir,
+               "--outdir",       fastq_dir,
                "--split-3",
                "--gzip",
                "--maxSpotCount", str(max_spots)]
@@ -292,6 +309,10 @@ def main():
                     help="Skip SRA download; use already-present FASTQ files")
     ap.add_argument("--datasets", nargs="+", metavar="NAME",
                     help="Run only these dataset names (default: all)")
+    ap.add_argument("--ncbi-api-key", default="",
+                    help="NCBI API key for higher E-utilities rate limit (10 req/s). "
+                         "Also read from NCBI_API_KEY env var. "
+                         "Get one free at https://www.ncbi.nlm.nih.gov/account/")
     args = ap.parse_args()
 
     build_dir    = Path(args.build_dir).resolve()
@@ -301,6 +322,17 @@ def main():
 
     datasets_dir.mkdir(parents=True, exist_ok=True)
     outputs_dir.mkdir(parents=True, exist_ok=True)
+
+    # ---- Configure NCBI rate limiting ----
+    global _NCBI_API_KEY, _NCBI_SLEEP
+    _NCBI_API_KEY = (args.ncbi_api_key
+                     or os.environ.get("NCBI_API_KEY", ""))
+    if _NCBI_API_KEY:
+        _NCBI_SLEEP = 0.12   # 10 req/s with key
+        print(f"NCBI API key : set (10 req/s)")
+    else:
+        _NCBI_SLEEP = 0.4    # 3 req/s without key
+        print("NCBI API key : not set (2.5 req/s, get one free at ncbi.nlm.nih.gov/account)")
 
     # ---- Locate megahit_topo binary ----
     topo = args.megahit_topo
