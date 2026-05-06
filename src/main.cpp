@@ -64,8 +64,8 @@ static std::string GetBinaryDir(const char* argv0) {
 }
 
 // Find megahit_core_no_hw_accel or megahit_core.
-// Looks in bin_dir (same directory as megahit_topo) first, then falls back
-// to the directory of the megahit wrapper script via `which`.
+// The binary lives in libs/megahit/<build-subdir>/ relative to this project root.
+// Project root = parent of the directory containing megahit_topo.
 static std::string FindMegahitCore(const std::string& bin_dir) {
 #ifdef _WIN32
     const char* ext = ".exe";
@@ -74,25 +74,38 @@ static std::string FindMegahitCore(const std::string& bin_dir) {
 #endif
     const char* names[] = {"megahit_core_no_hw_accel", "megahit_core", nullptr};
 
-    // Check bin_dir first — megahit_core is built into the same directory.
-    for (int i = 0; names[i]; ++i) {
-        std::string path = bin_dir + PATH_SEP + names[i] + ext;
-        FILE* f = fopen(path.c_str(), "rb");
-        if (f) { fclose(f); return path; }
+    // Candidate directories to probe, in order:
+    //   1. bin_dir itself (in case everything is in the same build dir)
+    //   2. <project_root>/libs/megahit/build/  (default cmake out-of-source build)
+    //   3. <project_root>/libs/megahit/         (in-source build)
+    // where project_root = bin_dir/..
+    const std::string root = bin_dir + "/../";
+    const std::string candidates[] = {
+        bin_dir,
+        root + "libs/megahit/build",
+        root + "libs/megahit",
+        "",   // sentinel
+    };
+
+    for (int c = 0; !candidates[c].empty(); ++c) {
+        for (int i = 0; names[i]; ++i) {
+            std::string path = candidates[c] + PATH_SEP + names[i] + ext;
+            FILE* f = fopen(path.c_str(), "rb");
+            if (f) { fclose(f); return path; }
+        }
     }
 
 #ifndef _WIN32
-    // Fallback: resolve via `which megahit`.
+    // Last resort: `which megahit` and look in the same dir.
     FILE* fp = popen("which megahit 2>/dev/null", "r");
     if (fp) {
         char buf[4096] = {};
         if (fgets(buf, sizeof(buf), fp)) {
-            std::string which(buf);
-            while (!which.empty() && (which.back() == '\n' || which.back() == '\r'))
-                which.pop_back();
-            size_t sep = which.find_last_of('/');
+            std::string w(buf);
+            while (!w.empty() && (w.back() == '\n' || w.back() == '\r')) w.pop_back();
+            size_t sep = w.find_last_of('/');
             if (sep != std::string::npos) {
-                std::string dir = which.substr(0, sep);
+                std::string dir = w.substr(0, sep);
                 for (int i = 0; names[i]; ++i) {
                     std::string path = dir + PATH_SEP + names[i] + ext;
                     FILE* f = fopen(path.c_str(), "rb");
