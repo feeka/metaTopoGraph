@@ -551,8 +551,6 @@ def main():
             if not ok:
                 rows.append([name, acc, title, biome, 0, 0, "download_failed"])
                 continue
-            # ENA gives .fastq.gz directly; fasterq-dump fallback gives .fastq
-            compress_uncompressed(str(fastq_dir))
         else:
             if not fastq_dir.exists():
                 print(f"  [SKIP] {fastq_dir} does not exist")
