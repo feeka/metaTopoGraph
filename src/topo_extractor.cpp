@@ -50,29 +50,34 @@ struct BubbleResult {
     double mult1;   // representative multiplicity of branch 1
 };
 
-// Walk both branches from a 2-out-degree edge with bounded depth.
-// A bubble is detected when both walk fronts share the same target node,
-// which is identified by Forward(cur0) == Forward(cur1).
-static BubbleResult FindBubbleFromBranch(SDBG& dbg, uint64_t edge,
-                                         uint64_t max_depth) {
+// Advance one step along a branch: take the first valid outgoing edge.
+// Unlike UniqueNextEdge, this does NOT require the target to have out-degree 1,
+// so it crosses merge nodes that are also branch points.
+static uint64_t FirstOutgoingEdge(SDBG& dbg, uint64_t edge_id) {
     uint64_t outgoings[8];
-    int od = dbg.OutgoingEdges(edge, outgoings);
-    if (od != 2) return {false, 0.0, 0.0};
+    int od = dbg.OutgoingEdges(edge_id, outgoings);
+    return od > 0 ? outgoings[0] : SDBG::kNullID;
+}
 
-    uint64_t cur0 = outgoings[0];
-    uint64_t cur1 = outgoings[1];
+// Walk two branches from a branching edge's two outgoing edges.
+// Convergence: Forward(cur0) == Forward(cur1) means both edges target the
+// same node (Forward returns the unique last-edge-of-node identifier).
+static BubbleResult WalkBranchPair(SDBG& dbg,
+                                   uint64_t branch0, uint64_t branch1,
+                                   uint64_t max_depth) {
+    const double mult0 = dbg.EdgeMultiplicity(branch0);
+    const double mult1 = dbg.EdgeMultiplicity(branch1);
 
-    // Use the multiplicity of the first edge on each branch as representative.
-    const double mult0 = dbg.EdgeMultiplicity(cur0);
-    const double mult1 = dbg.EdgeMultiplicity(cur1);
+    uint64_t cur0 = branch0;
+    uint64_t cur1 = branch1;
 
     for (uint64_t depth = 0; depth < max_depth; ++depth) {
-        // Both branches now point at the same target node → bubble closes.
-        if (dbg.Forward(cur0) == dbg.Forward(cur1)) {
+        // Forward(e) = last edge of the target node of e — unique per node.
+        if (dbg.Forward(cur0) == dbg.Forward(cur1))
             return {true, mult0, mult1};
-        }
-        uint64_t next0 = dbg.UniqueNextEdge(cur0);
-        uint64_t next1 = dbg.UniqueNextEdge(cur1);
+
+        uint64_t next0 = FirstOutgoingEdge(dbg, cur0);
+        uint64_t next1 = FirstOutgoingEdge(dbg, cur1);
         if (next0 == SDBG::kNullID || next1 == SDBG::kNullID) break;
         cur0 = next0;
         cur1 = next1;
@@ -142,13 +147,27 @@ HistogramFeatures ExtractHistogramFeatures(SDBG& dbg) {
             : 0.0;
     }
 
-    // Smooth histogram (sigma=1.5, radius=3) for valley/mode finding.
-    std::vector<double> smoothed = GaussianSmooth(hist, 1.5, 3);
+    // Use wider smoothing (sigma=5) for valley and mode detection so that noise
+    // ripples don't produce spurious peaks.  The tighter sigma=1.5 pass was
+    // already used for mean/CV above.
+    std::vector<double> smoothed = GaussianSmooth(hist, 5.0, 15);
 
-    // Feature 1 — valley_position: local minimum between mult 2 and 50
+    // Feature 1 — valley_position: local minimum between mult 2 and the rough
+    // signal peak.  We first find the rough peak (argmax right of mult=10) to
+    // set a dynamic upper bound, avoiding the fixed-50 boundary artefact.
+    uint32_t rough_peak     = 10;
+    double   rough_peak_val = smoothed[10];
+    for (uint32_t i = 11; i <= HIST_CAP; ++i) {
+        if (smoothed[i] > rough_peak_val) {
+            rough_peak_val = smoothed[i];
+            rough_peak     = i;
+        }
+    }
+    // Search for valley between mult=2 and halfway to the rough peak.
+    const uint32_t valley_upper = std::max(50u, rough_peak / 2);
     uint32_t valley_pos = 2;
     double   valley_val = smoothed[2];
-    for (uint32_t i = 3; i <= std::min(50u, HIST_CAP); ++i) {
+    for (uint32_t i = 3; i <= std::min(valley_upper, HIST_CAP); ++i) {
         if (smoothed[i] < valley_val) {
             valley_val = smoothed[i];
             valley_pos = i;
@@ -163,19 +182,28 @@ HistogramFeatures ExtractHistogramFeatures(SDBG& dbg) {
     }
 
     // Features 6 & 7 — n_signal_modes and primary_mode_depth
-    // Count local maxima right of valley; track argmax.
-    int      n_modes          = 0;
+    // Find the global maximum right of valley first (the primary mode).
+    // Only count secondary peaks that exceed mode_prominence_frac of that max.
+    // This prevents counting noise bumps as distinct modes.
+    const double mode_prominence_frac = 0.10;
     uint32_t primary_mode     = valley_pos;
     double   primary_mode_val = 0.0;
     const uint32_t right_end  = HIST_CAP - 1;
 
+    for (uint32_t i = valley_pos + 1; i <= right_end; ++i) {
+        if (smoothed[i] > primary_mode_val) {
+            primary_mode_val = smoothed[i];
+            primary_mode     = i;
+        }
+    }
+
+    int n_modes = 0;
+    const double prominence_threshold = mode_prominence_frac * primary_mode_val;
     for (uint32_t i = valley_pos + 1; i < right_end; ++i) {
-        if (smoothed[i] > smoothed[i - 1] && smoothed[i] > smoothed[i + 1]) {
+        if (smoothed[i] > smoothed[i - 1] &&
+            smoothed[i] > smoothed[i + 1] &&
+            smoothed[i] >= prominence_threshold) {
             ++n_modes;
-            if (smoothed[i] > primary_mode_val) {
-                primary_mode_val = smoothed[i];
-                primary_mode     = i;
-            }
         }
     }
     hf.n_signal_modes    = n_modes;
@@ -306,28 +334,40 @@ BubbleFeatures ExtractBubbleFeatures(SDBG& dbg,
     uint64_t n_balanced   = 0;
 
     // Each bubble walk is independent — dynamic schedule handles variable cost.
+    // Check all branch pairs (not just od==2): handles degree-3+ branching nodes.
 #pragma omp parallel for schedule(dynamic,64) \
     reduction(+:n_branching,n_bubbles,n_error,n_balanced)
     for (int64_t j = 0; j < m; ++j) {
         uint64_t i = indices[j];
         if (!dbg.IsValidEdge(i)) continue;
-        if (dbg.EdgeOutdegree(i) != 2) continue;
+
+        uint64_t outgoings[8];
+        int od = dbg.OutgoingEdges(i, outgoings);
+        if (od < 2) continue;
 
         ++n_branching;
-        BubbleResult res = FindBubbleFromBranch(dbg, i, opts.max_bubble_depth);
-        if (!res.found) continue;
 
-        ++n_bubbles;
-        double hi    = std::max(res.mult0, res.mult1);
-        double lo    = std::min(res.mult0, res.mult1);
-        double ratio = lo > 0.0 ? hi / lo : hi;
+        // Check all pairs of outgoing branches.
+        for (int b0 = 0; b0 < od; ++b0) {
+            for (int b1 = b0 + 1; b1 < od; ++b1) {
+                BubbleResult res = WalkBranchPair(dbg,
+                                                  outgoings[b0], outgoings[b1],
+                                                  opts.max_bubble_depth);
+                if (!res.found) continue;
 
-        if (ratio > 5.0) {
-            ++n_error;
-        } else if (ratio < 2.0 &&
-                   res.mult0 > valley_position &&
-                   res.mult1 > valley_position) {
-            ++n_balanced;
+                ++n_bubbles;
+                double hi    = std::max(res.mult0, res.mult1);
+                double lo    = std::min(res.mult0, res.mult1);
+                double ratio = lo > 0.0 ? hi / lo : hi;
+
+                if (ratio > 5.0) {
+                    ++n_error;
+                } else if (ratio < 2.0 &&
+                           res.mult0 > valley_position &&
+                           res.mult1 > valley_position) {
+                    ++n_balanced;
+                }
+            }
         }
     }
 
