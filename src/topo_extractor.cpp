@@ -87,7 +87,7 @@ static BubbleResult WalkBranchPair(SDBG& dbg,
 // Phase 1: histogram features
 // ---------------------------------------------------------------------------
 
-HistogramFeatures ExtractHistogramFeatures(SDBG& dbg) {
+HistogramFeatures ExtractHistogramFeatures(SDBG& dbg, double* out_valley_pos) {
     // Build raw multiplicity histogram up to HIST_CAP.
     const uint32_t HIST_CAP = 1000;
     std::vector<uint64_t> hist(HIST_CAP + 1, 0);
@@ -185,6 +185,7 @@ HistogramFeatures ExtractHistogramFeatures(SDBG& dbg) {
     }
     // valley_pos is kept as a local variable; it drives features 6-8 and
     // bubble classification but is not exported.
+    if (out_valley_pos) *out_valley_pos = static_cast<double>(valley_pos);
 
     // Features 6 & 7 — n_signal_modes and primary_mode_depth
     // Find the global maximum right of valley first (the primary mode).
@@ -402,7 +403,8 @@ TopoFeatures RunExtraction(SDBG& dbg, const ExtractionOptions& opts) {
     TopoFeatures tf = {};
 
     auto t0 = Clock::now();
-    tf.hist = ExtractHistogramFeatures(dbg);
+    double valley_pos_val = 0.0;
+    tf.hist = ExtractHistogramFeatures(dbg, &valley_pos_val);
     auto t1 = Clock::now();
 
     tf.node = ExtractNodeFeatures(dbg, opts);
@@ -416,7 +418,7 @@ TopoFeatures RunExtraction(SDBG& dbg, const ExtractionOptions& opts) {
     auto t3 = Clock::now();
 
     {
-        BubbleFeatures bf = ExtractBubbleFeatures(dbg, opts, tf.hist.valley_position);
+        BubbleFeatures bf = ExtractBubbleFeatures(dbg, opts, valley_pos_val);
         tf.walk.bubble_density           = bf.bubble_density;
         tf.walk.error_bubble_fraction    = bf.error_bubble_fraction;
         tf.walk.balanced_bubble_fraction = bf.balanced_bubble_fraction;

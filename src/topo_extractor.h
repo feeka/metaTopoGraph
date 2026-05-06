@@ -29,7 +29,8 @@ struct TipWalkResult {
 };
 
 // --- Phase 1: histogram features (features 1-8) ---
-HistogramFeatures ExtractHistogramFeatures(SDBG& dbg);
+// out_valley_pos receives the internal valley multiplicity used by phase 4.
+HistogramFeatures ExtractHistogramFeatures(SDBG& dbg, double* out_valley_pos = nullptr);
 
 // --- Phase 2: node-level features (features 9-14) ---
 NodeFeatures ExtractNodeFeatures(SDBG& dbg, const ExtractionOptions& opts);
