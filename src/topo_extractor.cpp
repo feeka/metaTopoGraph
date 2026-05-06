@@ -182,8 +182,9 @@ HistogramFeatures ExtractHistogramFeatures(SDBG& dbg) {
             if (smoothed[i] > error_peak) error_peak = smoothed[i];
         if (error_peak <= 0.0) error_peak = 1.0;
         hf.valley_depth      = valley_val / error_peak;
+    }
     // valley_pos is kept as a local variable; it drives features 6-8 and
-    // bubble classification but is not exported.}
+    // bubble classification but is not exported.
 
     // Features 6 & 7 — n_signal_modes and primary_mode_depth
     // Find the global maximum right of valley first (the primary mode).
