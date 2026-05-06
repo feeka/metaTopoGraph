@@ -229,26 +229,67 @@ def find_r1_r2(fastq_dir: str):
     return r1, r2
 
 
+# Detected at startup by _probe_fasterq_flags()
+_FASTERQ_SPOT_FLAG: str = "none"   # 'NX', 'maxSpotCount', or 'none'
+
+
+def _probe_fasterq_flags() -> str:
+    """
+    Run fasterq-dump --help and inspect which spot-limiting flags exist.
+    Returns 'NX' if -N/-X are supported, 'maxSpotCount' if that flag exists,
+    or 'none' if neither is found (we will truncate after download).
+    """
+    try:
+        result = subprocess.run(
+            ["fasterq-dump", "--help"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=10
+        )
+        text = (result.stdout + result.stderr).decode(errors="replace")
+        if "-N " in text or "--minSpotId" in text or "-N," in text:
+            return "NX"
+        if "--maxSpotCount" in text:
+            return "maxSpotCount"
+        return "none"
+    except Exception:
+        return "none"
+
+
+def _truncate_fastq(path: str, max_reads: int):
+    """Keep only the first max_reads reads in a (possibly gzipped) FASTQ."""
+    max_lines = max_reads * 4
+    opener_r = gzip.open if path.endswith(".gz") else open
+    tmp = path + ".tmp"
+    opener_w = gzip.open if path.endswith(".gz") else open
+    mode_r = "rt"
+    mode_w = "wt"
+    with opener_r(path, mode_r) as fin, opener_w(tmp, mode_w) as fout:
+        for i, line in enumerate(fin):
+            if i >= max_lines:
+                break
+            fout.write(line)
+    os.replace(tmp, path)
+
 # ---------------------------------------------------------------------------
 # Download
 # ---------------------------------------------------------------------------
+
 
 def download_accession(acc: str, fastq_dir: str, max_spots: int,
                         threads: int, use_fasterq: bool) -> bool:
     os.makedirs(fastq_dir, exist_ok=True)
     if use_fasterq:
-        # fasterq-dump does not have --maxSpotCount; use -N/-X to cap the
-        # spot range (1-based start/stop).  --split-3 puts paired reads in
-        # <acc>_1.fastq and <acc>_2.fastq, singletons in <acc>.fastq.
         cmd = ["fasterq-dump", acc,
                "--outdir",  fastq_dir,
                "--split-3",
                "--threads", str(threads),
-               "-N", "1",
-               "-X", str(max_spots),
                "--progress"]
+        if _FASTERQ_SPOT_FLAG == "NX":
+            cmd += ["-N", "1", "-X", str(max_spots)]
+        elif _FASTERQ_SPOT_FLAG == "maxSpotCount":
+            cmd += ["--maxSpotCount", str(max_spots)]
+        # else: no flag — download all, truncate below
     else:
-        # fastq-dump (legacy) does have --maxSpotCount
         cmd = ["fastq-dump", acc,
                "--outdir",       fastq_dir,
                "--split-3",
@@ -258,6 +299,12 @@ def download_accession(acc: str, fastq_dir: str, max_spots: int,
     if rc != 0:
         print(f"  [WARN] Download failed (exit {rc})", flush=True)
         return False
+    # Truncate if fasterq-dump has no native spot cap
+    if use_fasterq and _FASTERQ_SPOT_FLAG == "none":
+        print(f"  Truncating to {max_spots:,} spots ...", flush=True)
+        for fname in os.listdir(fastq_dir):
+            if fname.endswith(".fastq") or fname.endswith(".fastq.gz"):
+                _truncate_fastq(os.path.join(fastq_dir, fname), max_spots)
     return True
 
 
@@ -358,7 +405,8 @@ def main():
     print(f"megahit_topo : {topo}")
     print(f"Output root  : {build_dir}")
 
-    # ---- Check SRA tools ----
+    # ---- Check SRA tools and probe flags ----
+    global _FASTERQ_SPOT_FLAG
     use_fasterq = bool(shutil.which("fasterq-dump"))
     use_legacy  = bool(shutil.which("fastq-dump"))
     if not args.skip_download and not use_fasterq and not use_legacy:
@@ -366,6 +414,11 @@ def main():
             "ERROR: sra-tools not found in PATH.\n"
             "Install from https://github.com/ncbi/sra-tools/wiki/01.-Downloading-SRA-Toolkit"
         )
+    if use_fasterq:
+        _FASTERQ_SPOT_FLAG = _probe_fasterq_flags()
+        print(f"fasterq-dump : found  spot-cap flag={_FASTERQ_SPOT_FLAG}")
+    else:
+        print("fasterq-dump : not found, using fastq-dump (slower)")
 
     # ---- Filter catalogue ----
     catalogue = BIOME_QUERIES
