@@ -279,7 +279,7 @@ NodeFeatures ExtractNodeFeatures(SDBG& dbg, const ExtractionOptions& opts) {
 // Phase 3: tip walk (feature 15)
 // ---------------------------------------------------------------------------
 
-double ExtractMeanTipLength(SDBG& dbg, const ExtractionOptions& opts) {
+TipWalkResult ExtractMeanTipLength(SDBG& dbg, const ExtractionOptions& opts) {
     // Walk from sampled tip edges (outdeg == 0) backward along the path
     // until we reach a branch, another dead-end, or max_tip_length steps.
     const uint64_t n      = dbg.size();
