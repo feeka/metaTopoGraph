@@ -445,8 +445,8 @@ def main():
                     help=f"Max SRA spots per run (default {DEFAULT_MAX_SPOTS:,})")
     ap.add_argument("--threads", type=int, default=4,
                     help="Threads for fasterq-dump and megahit_topo (default 4)")
-    ap.add_argument("--mem", type=float, default=8.0,
-                    help="Memory GB for SDBG build (default 8.0)")
+    ap.add_argument("--mem", type=float, default=None,
+                    help="Memory GB for SDBG build (default: 90%% of system RAM, matching MEGAHIT)")
     ap.add_argument("--sample", type=int, default=200_000,
                     help="Edges sampled per dataset for feature extraction (default 200000)")
     ap.add_argument("--min-count", type=int, default=2,
@@ -581,7 +581,7 @@ def main():
             "--output",    str(output_json),
             "--sample",    str(args.sample),
             "--threads",   str(args.threads),
-            "--mem",       str(args.mem),
+            *((["--mem", str(args.mem)] if args.mem is not None else [])),
             "--min-count", str(args.min_count),
         ]
         if r2:

@@ -21,12 +21,20 @@ static void RemoveDir(const std::string& p) {
 }
 #else
 #include <sys/stat.h>
+#include <sys/sysinfo.h>
 #include <unistd.h>
 #define PATH_SEP '/'
 static bool MakeDir(const std::string& p) { return mkdir(p.c_str(), 0755) == 0; }
 static void RemoveDir(const std::string& p) {
     std::string cmd = "rm -rf \"" + p + "\"";
     system(cmd.c_str());
+}
+// Returns 90 % of total physical RAM in bytes, matching MEGAHIT's default.
+static uint64_t AutoMemBytes() {
+    struct sysinfo si;
+    if (sysinfo(&si) == 0)
+        return static_cast<uint64_t>(si.totalram * si.mem_unit * 0.9);
+    return static_cast<uint64_t>(8ULL * 1073741824ULL); // fallback: 8 GB
 }
 #endif
 
@@ -116,7 +124,9 @@ static std::string BuildSdbgFromReads(const std::string& reads1,
 
     // ---- Step 2: build SDBG from the binary lib ----
     const std::string sdbg_prefix = tmp_dir + PATH_SEP + "k21";
-    const uint64_t    mem_bytes   = static_cast<uint64_t>(host_mem_gb * 1073741824.0);
+    const uint64_t    mem_bytes   = host_mem_gb > 0.0
+        ? static_cast<uint64_t>(host_mem_gb * 1073741824.0)
+        : AutoMemBytes();
 
     {
         std::ostringstream cmd;
@@ -158,7 +168,7 @@ static void PrintUsage(const char* prog) {
         << "  --output     Output JSON file path\n"
         << "  --sample     Edges to sample for node/walk/bubble phases (default 100000)\n"
         << "  --threads    OpenMP threads (default: all available)\n"
-        << "  --mem        Memory for SDBG build in GB, reads mode only (default 8.0)\n"
+        << "  --mem        Memory for SDBG build in GB, reads mode only (default: 90% of RAM)\n"
         << "  --min-count  Min k-mer frequency for SDBG build (default 2)\n";
 }
 
@@ -173,7 +183,7 @@ int main(int argc, char** argv) {
     std::string output_path;
     ExtractionOptions opts;
     int     n_threads  = 0;
-    double  mem_gb     = 8.0;
+    double  mem_gb     = 0.0;  // 0 = auto (90% of system RAM, matching MEGAHIT default)
     int     min_count  = 2;
 
     for (int i = 1; i < argc; ++i) {
