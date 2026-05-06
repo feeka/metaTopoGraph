@@ -47,44 +47,62 @@ static uint64_t AutoMemBytes() {
 // ---------------------------------------------------------------------------
 
 static std::string GetBinaryDir(const char* argv0) {
+#ifndef _WIN32
+    // /proc/self/exe is the canonical path regardless of how the binary was invoked.
+    char buf[4096] = {};
+    ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (len > 0) {
+        std::string p(buf, len);
+        size_t sep = p.find_last_of('/');
+        if (sep != std::string::npos) return p.substr(0, sep);
+    }
+#endif
+    // Fallback: derive from argv[0].
     std::string p(argv0);
     size_t sep = p.find_last_of("/\\");
     return sep == std::string::npos ? std::string(".") : p.substr(0, sep);
 }
 
 // Find megahit_core_no_hw_accel or megahit_core.
-// Search order: next to this binary, then every directory in PATH.
+// Looks in bin_dir (same directory as megahit_topo) first, then falls back
+// to the directory of the megahit wrapper script via `which`.
 static std::string FindMegahitCore(const std::string& bin_dir) {
 #ifdef _WIN32
     const char* ext = ".exe";
-    const char  path_sep = ';';
 #else
     const char* ext = "";
-    const char  path_sep = ':';
 #endif
     const char* names[] = {"megahit_core_no_hw_accel", "megahit_core", nullptr};
 
-    // Build search directories: binary dir first, then PATH entries.
-    std::vector<std::string> dirs;
-    dirs.push_back(bin_dir);
-    const char* env_path = getenv("PATH");
-    if (env_path) {
-        std::string p(env_path);
-        std::string::size_type start = 0, end;
-        while ((end = p.find(path_sep, start)) != std::string::npos) {
-            dirs.push_back(p.substr(start, end - start));
-            start = end + 1;
-        }
-        dirs.push_back(p.substr(start));
+    // Check bin_dir first — megahit_core is built into the same directory.
+    for (int i = 0; names[i]; ++i) {
+        std::string path = bin_dir + PATH_SEP + names[i] + ext;
+        FILE* f = fopen(path.c_str(), "rb");
+        if (f) { fclose(f); return path; }
     }
 
-    for (const std::string& dir : dirs) {
-        for (int i = 0; names[i]; ++i) {
-            std::string path = dir + PATH_SEP + names[i] + ext;
-            FILE* f = fopen(path.c_str(), "rb");
-            if (f) { fclose(f); return path; }
+#ifndef _WIN32
+    // Fallback: resolve via `which megahit`.
+    FILE* fp = popen("which megahit 2>/dev/null", "r");
+    if (fp) {
+        char buf[4096] = {};
+        if (fgets(buf, sizeof(buf), fp)) {
+            std::string which(buf);
+            while (!which.empty() && (which.back() == '\n' || which.back() == '\r'))
+                which.pop_back();
+            size_t sep = which.find_last_of('/');
+            if (sep != std::string::npos) {
+                std::string dir = which.substr(0, sep);
+                for (int i = 0; names[i]; ++i) {
+                    std::string path = dir + PATH_SEP + names[i] + ext;
+                    FILE* f = fopen(path.c_str(), "rb");
+                    if (f) { fclose(f); pclose(fp); return path; }
+                }
+            }
         }
+        pclose(fp);
     }
+#endif
     return "";
 }
 
