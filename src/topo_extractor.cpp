@@ -171,7 +171,7 @@ HistogramFeatures ExtractHistogramFeatures(SDBG& dbg) {
             valley_pos = i;
         }
     }
-    hf.valley_position = valley_pos;
+    // valley_pos drives features 2, 6-8 and bubble classification internally.
 
     // Feature 2 — valley_depth = count_at_valley / max(smoothed[1..valley_pos]).
     // Using the actual smoothed peak in [1, valley_pos) rather than just smoothed[1]
@@ -181,8 +181,9 @@ HistogramFeatures ExtractHistogramFeatures(SDBG& dbg) {
         for (uint32_t i = 2; i < valley_pos; ++i)
             if (smoothed[i] > error_peak) error_peak = smoothed[i];
         if (error_peak <= 0.0) error_peak = 1.0;
-        hf.valley_depth = valley_val / error_peak;
-    }
+        hf.valley_depth      = valley_val / error_peak;
+    // valley_pos is kept as a local variable; it drives features 6-8 and
+    // bubble classification but is not exported.}
 
     // Features 6 & 7 — n_signal_modes and primary_mode_depth
     // Find the global maximum right of valley first (the primary mode).

@@ -4,7 +4,6 @@
 
 // Features derived from the edge multiplicity histogram (features 1-8).
 struct HistogramFeatures {
-    double valley_position;         // argmin of smoothed hist between mult 2..50
     double valley_depth;            // count_at_valley / count_at_error_peak
     double mult_1_fraction;         // hist[1] / total_edges
     double mean_node_multiplicity;  // weighted mean of multiplicity histogram

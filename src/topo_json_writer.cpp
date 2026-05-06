@@ -12,7 +12,6 @@ void WriteFeatures(const TopoFeatures& f, const std::string& output_path) {
     out << "{\n";
 
     out << "  \"histogram\": {\n";
-    out << "    \"valley_position\": "        << f.hist.valley_position        << ",\n";
     out << "    \"valley_depth\": "           << f.hist.valley_depth           << ",\n";
     out << "    \"mult_1_fraction\": "        << f.hist.mult_1_fraction        << ",\n";
     out << "    \"mean_node_multiplicity\": " << f.hist.mean_node_multiplicity << ",\n";
