@@ -1,59 +1,233 @@
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #ifdef _OPENMP
 #include <omp.h>
+#endif
+
+#ifdef _WIN32
+#include <direct.h>
+#define PATH_SEP '\\'
+static bool MakeDir(const std::string& p) { return _mkdir(p.c_str()) == 0; }
+static void RemoveDir(const std::string& p) {
+    std::string cmd = "rmdir /S /Q \"" + p + "\"";
+    system(cmd.c_str());
+}
+#else
+#include <sys/stat.h>
+#include <unistd.h>
+#define PATH_SEP '/'
+static bool MakeDir(const std::string& p) { return mkdir(p.c_str(), 0755) == 0; }
+static void RemoveDir(const std::string& p) {
+    std::string cmd = "rm -rf \"" + p + "\"";
+    system(cmd.c_str());
+}
 #endif
 
 #include "sdbg/sdbg.h"
 #include "topo_extractor.h"
 #include "topo_json_writer.h"
 
-static void PrintUsage(const char* prog) {
-    std::cerr << "Usage: " << prog
-              << " --graph <sdbg_prefix> --output <features.json>"
-                 " [--sample <N>] [--threads <T>]\n"
-              << "\n"
-              << "  --graph    Path prefix for the SDBG files written by megahit_core\n"
-              << "             (the tool will open <prefix>.sdbg_info and <prefix>.sdbg.*)\n"
-              << "  --output   Path for the JSON output file\n"
-              << "  --sample   Number of edges to sample (default 100000)\n"
-              << "  --threads  Number of OpenMP threads (default: all available)\n";
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+static std::string GetBinaryDir(const char* argv0) {
+    std::string p(argv0);
+    size_t sep = p.find_last_of("/\\");
+    return sep == std::string::npos ? std::string(".") : p.substr(0, sep);
 }
+
+// Find megahit_core_no_hw_accel or megahit_core next to this binary.
+static std::string FindMegahitCore(const std::string& bin_dir) {
+#ifdef _WIN32
+    const char* ext = ".exe";
+#else
+    const char* ext = "";
+#endif
+    const char* names[] = {"megahit_core_no_hw_accel", "megahit_core", nullptr};
+    for (int i = 0; names[i]; ++i) {
+        std::string path = bin_dir + PATH_SEP + names[i] + ext;
+        FILE* f = fopen(path.c_str(), "rb");
+        if (f) { fclose(f); return path; }
+    }
+    return "";
+}
+
+// Invoke megahit_core read2sdbg and return the SDBG prefix.
+static std::string BuildSdbgFromReads(const std::string& reads_file,
+                                      const std::string& bin_dir,
+                                      const std::string& tmp_dir,
+                                      int n_threads,
+                                      double host_mem_gb,
+                                      int min_count) {
+    const std::string core = FindMegahitCore(bin_dir);
+    if (core.empty())
+        throw std::runtime_error(
+            "Cannot find megahit_core_no_hw_accel or megahit_core in: " + bin_dir +
+            "\nBuild MEGAHIT first (cmake && make in libs/megahit/build).");
+
+    if (!MakeDir(tmp_dir))
+        throw std::runtime_error("Cannot create temp directory: " + tmp_dir);
+
+    const std::string prefix = tmp_dir + PATH_SEP + "k21";
+    const uint64_t mem_bytes = static_cast<uint64_t>(host_mem_gb * 1073741824.0);
+
+    std::ostringstream cmd;
+    cmd << "\"" << core << "\" read2sdbg"
+        << " --kmer_k 21"
+        << " --min_kmer_frequency " << min_count
+        << " --read_lib_file \""    << reads_file << "\""
+        << " --output_prefix \""    << prefix     << "\""
+        << " --num_cpu_threads "    << n_threads
+        << " --host_mem "           << mem_bytes
+        << " --need_mercy 1";
+
+    std::cerr << "Building SDBG: " << cmd.str() << "\n";
+    int ret = system(cmd.str().c_str());
+    if (ret != 0)
+        throw std::runtime_error(
+            "megahit_core read2sdbg failed (exit " + std::to_string(ret) + ")");
+    return prefix;
+}
+
+// ---------------------------------------------------------------------------
+// Usage
+// ---------------------------------------------------------------------------
+
+static void PrintUsage(const char* prog) {
+    std::cerr
+        << "Usage:\n"
+        << "  From pre-built SDBG:\n"
+        << "    " << prog << " --graph <sdbg_prefix> --output <features.json> [options]\n\n"
+        << "  From reads (builds SDBG, extracts, then deletes the SDBG):\n"
+        << "    " << prog << " --reads <reads.fa/fq[.gz]> --output <features.json> [options]\n\n"
+        << "Options:\n"
+        << "  --graph    SDBG file prefix (opens <prefix>.sdbg_info + <prefix>.sdbg.*)\n"
+        << "  --reads    Input FASTA/FASTQ reads file (triggers SDBG build at k=21)\n"
+        << "  --output   Output JSON file path\n"
+        << "  --sample   Edges to sample for node/walk/bubble phases (default 100000)\n"
+        << "  --threads  OpenMP threads (default: all available)\n"
+        << "  --mem      Memory for SDBG build in GB, reads mode only (default 8.0)\n"
+        << "  --min-count  Min k-mer frequency for SDBG build (default 2)\n";
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
 
 int main(int argc, char** argv) {
     std::string graph_prefix;
+    std::string reads_file;
     std::string output_path;
     ExtractionOptions opts;
-    int n_threads = 0;  // 0 = use OpenMP default
+    int     n_threads  = 0;
+    double  mem_gb     = 8.0;
+    int     min_count  = 2;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg(argv[i]);
-        if (arg == "--graph" && i + 1 < argc) {
-            graph_prefix = argv[++i];
-        } else if (arg == "--output" && i + 1 < argc) {
-            output_path = argv[++i];
-        } else if (arg == "--sample" && i + 1 < argc) {
-            opts.sample_size = static_cast<uint64_t>(std::atoll(argv[++i]));
-        } else if (arg == "--threads" && i + 1 < argc) {
-            n_threads = std::atoi(argv[++i]);
-        } else {
-            std::cerr << "Unknown argument: " << arg << "\n";
-            PrintUsage(argv[0]);
-            return 1;
-        }
+        if      (arg == "--graph"     && i + 1 < argc) graph_prefix = argv[++i];
+        else if (arg == "--reads"     && i + 1 < argc) reads_file   = argv[++i];
+        else if (arg == "--output"    && i + 1 < argc) output_path  = argv[++i];
+        else if (arg == "--sample"    && i + 1 < argc) opts.sample_size = static_cast<uint64_t>(std::atoll(argv[++i]));
+        else if (arg == "--threads"   && i + 1 < argc) n_threads    = std::atoi(argv[++i]);
+        else if (arg == "--mem"       && i + 1 < argc) mem_gb       = std::atof(argv[++i]);
+        else if (arg == "--min-count" && i + 1 < argc) min_count    = std::atoi(argv[++i]);
+        else { std::cerr << "Unknown argument: " << arg << "\n"; PrintUsage(argv[0]); return 1; }
+    }
+
+    if (output_path.empty() || (graph_prefix.empty() == reads_file.empty())) {
+        // both empty or both set
+        PrintUsage(argv[0]);
+        return 1;
     }
 
 #ifdef _OPENMP
-    if (n_threads > 0) {
-        omp_set_num_threads(n_threads);
-    }
+    if (n_threads > 0) omp_set_num_threads(n_threads);
     std::cerr << "Threads: " << omp_get_max_threads() << "\n";
 #else
     std::cerr << "Threads: 1 (OpenMP not available)\n";
 #endif
+
+    // ----- reads mode: build SDBG, remember to clean up -----
+    bool owns_tmp = false;
+    std::string tmp_dir;
+
+    if (!reads_file.empty()) {
+        const std::string bin_dir = GetBinaryDir(argv[0]);
+        tmp_dir   = bin_dir + PATH_SEP + "megahit_topo_tmp_" + std::to_string(
+#ifdef _WIN32
+                        static_cast<unsigned>(GetCurrentProcessId())
+#else
+                        static_cast<unsigned>(getpid())
+#endif
+                    );
+        owns_tmp = true;
+        try {
+            graph_prefix = BuildSdbgFromReads(reads_file, bin_dir, tmp_dir,
+                                              n_threads > 0 ? n_threads : 1,
+                                              mem_gb, min_count);
+        } catch (const std::exception& e) {
+            std::cerr << "Error: " << e.what() << "\n";
+            if (owns_tmp) RemoveDir(tmp_dir);
+            return 1;
+        }
+    }
+
+    // ----- load SDBG -----
+    SDBG dbg;
+    try {
+        std::cerr << "Loading SDBG from: " << graph_prefix << " ...\n";
+        dbg.LoadFromFile(graph_prefix.c_str());
+        std::cerr << "  edges: " << dbg.size() << "  k=" << dbg.k() << "\n";
+    } catch (const std::exception& e) {
+        std::cerr << "Error loading SDBG: " << e.what() << "\n";
+        if (owns_tmp) RemoveDir(tmp_dir);
+        return 1;
+    }
+
+    // ----- extract -----
+    TopoFeatures features;
+    try {
+        std::cerr << "Extracting features (sample_size=" << opts.sample_size << ") ...\n";
+        features = RunExtraction(dbg, opts);
+    } catch (const std::exception& e) {
+        std::cerr << "Error during extraction: " << e.what() << "\n";
+        if (owns_tmp) RemoveDir(tmp_dir);
+        return 1;
+    }
+
+    std::cerr << "  histogram:  " << features.timing.histogram_ms << " ms\n";
+    std::cerr << "  node:       " << features.timing.node_ms      << " ms\n";
+    std::cerr << "  tip walk:   " << features.timing.walk_ms      << " ms\n";
+    std::cerr << "  bubbles:    " << features.timing.bubble_ms    << " ms\n";
+
+    // ----- write output -----
+    try {
+        WriteFeatures(features, output_path);
+        std::cerr << "Features written to: " << output_path << "\n";
+    } catch (const std::exception& e) {
+        std::cerr << "Error writing output: " << e.what() << "\n";
+        if (owns_tmp) RemoveDir(tmp_dir);
+        return 1;
+    }
+
+    // ----- clean up temp SDBG -----
+    if (owns_tmp) {
+        std::cerr << "Removing temp SDBG: " << tmp_dir << "\n";
+        RemoveDir(tmp_dir);
+    }
+
+    return 0;
+}
+
 
     if (graph_prefix.empty() || output_path.empty()) {
         PrintUsage(argv[0]);

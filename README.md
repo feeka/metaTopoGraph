@@ -39,14 +39,24 @@ Requires: CMake ≥ 3.5, C++14 compiler, zlib, OpenMP.
 ## Usage
 
 ```bash
-# 1. Run megahit_core as usual to build the SDBG (produces <outdir>/k21.sdbg_info etc.)
-# 2. Extract topology features
+# From a pre-built SDBG (megahit_core must have already run)
 ./megahit_topo --graph <outdir>/k21 --output features.json [--sample 100000] [--threads 8]
+
+# From raw reads (builds SDBG at k=21, extracts features, then deletes the SDBG)
+./megahit_topo --reads sample.fa --output features.json [--mem 16.0] [--min-count 2] [--threads 8]
 ```
 
-`--graph` is the SDBG file prefix (same string passed to MEGAHIT's sdbg build step).  
-`--sample` controls how many edges are visited during node/walk/bubble phases (default 100 000).  
-`--threads` sets the number of OpenMP threads for the histogram phase (default: all available cores).
+| Flag | Description | Default |
+|---|---|---|
+| `--graph` | SDBG file prefix | — |
+| `--reads` | FASTA/FASTQ input (triggers SDBG build) | — |
+| `--output` | Output JSON path | required |
+| `--sample` | Edges sampled for node/walk/bubble phases | 100 000 |
+| `--threads` | OpenMP threads | all cores |
+| `--mem` | Memory for SDBG build in GB (reads mode only) | 8.0 |
+| `--min-count` | Min k-mer frequency (reads mode only) | 2 |
+
+In reads mode, `megahit_core_no_hw_accel` (or `megahit_core`) must be present in the same directory as `megahit_topo`. The temporary SDBG is written to `<binary_dir>/megahit_topo_tmp_<pid>/` and deleted on exit.
 
 ## Source layout
 
