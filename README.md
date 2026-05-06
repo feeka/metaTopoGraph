@@ -41,11 +41,12 @@ Requires: CMake ≥ 3.5, C++14 compiler, zlib, OpenMP.
 ```bash
 # 1. Run megahit_core as usual to build the SDBG (produces <outdir>/k21.sdbg_info etc.)
 # 2. Extract topology features
-./megahit_topo --graph <outdir>/k21 --output features.json [--sample 100000]
+./megahit_topo --graph <outdir>/k21 --output features.json [--sample 100000] [--threads 8]
 ```
 
 `--graph` is the SDBG file prefix (same string passed to MEGAHIT's sdbg build step).  
-`--sample` controls how many edges are visited during node/walk/bubble phases (default 100 000).
+`--sample` controls how many edges are visited during node/walk/bubble phases (default 100 000).  
+`--threads` sets the number of OpenMP threads for the histogram phase (default: all available cores).
 
 ## Source layout
 

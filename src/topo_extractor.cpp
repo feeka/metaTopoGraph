@@ -6,6 +6,10 @@
 #include <cmath>
 #include <vector>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 #include "sdbg/sdbg_def.h"
 
 // ---------------------------------------------------------------------------
@@ -86,13 +90,35 @@ HistogramFeatures ExtractHistogramFeatures(SDBG& dbg) {
     std::vector<uint64_t> hist(HIST_CAP + 1, 0);
     uint64_t total = 0;
 
+    // Phase 1 scans every edge — parallelise with per-thread private histograms
+    // to avoid false sharing on the shared array.
+#ifdef _OPENMP
+    const int nthreads = omp_get_max_threads();
+#else
+    const int nthreads = 1;
+#endif
+    std::vector<std::vector<uint64_t>> phist(nthreads,
+                                             std::vector<uint64_t>(HIST_CAP + 1, 0));
+    std::vector<uint64_t> ptotal(nthreads, 0);
+
+#pragma omp parallel for schedule(static)
     for (uint64_t i = 0; i < dbg.size(); ++i) {
         if (dbg.IsValidEdge(i)) {
+#ifdef _OPENMP
+            const int tid = omp_get_thread_num();
+#else
+            const int tid = 0;
+#endif
             mul_t m = dbg.EdgeMultiplicity(i);
             uint32_t idx = std::min(static_cast<uint32_t>(m), HIST_CAP);
-            hist[idx]++;
-            total++;
+            phist[tid][idx]++;
+            ptotal[tid]++;
         }
+    }
+
+    for (int t = 0; t < nthreads; ++t) {
+        for (uint32_t j = 0; j <= HIST_CAP; ++j) hist[j] += phist[t][j];
+        total += ptotal[t];
     }
 
     HistogramFeatures hf = {};
@@ -174,24 +200,33 @@ NodeFeatures ExtractNodeFeatures(SDBG& dbg, const ExtractionOptions& opts) {
     const uint64_t n      = dbg.size();
     const uint64_t stride = std::max(uint64_t(1), n / opts.sample_size);
 
+    // Build the strided index list so OpenMP can divide it evenly.
+    std::vector<uint64_t> indices;
+    indices.reserve(opts.sample_size + 1);
+    for (uint64_t i = 0; i < n; i += stride) indices.push_back(i);
+    const int64_t m = static_cast<int64_t>(indices.size());
+
     uint64_t n_valid = 0, n_tips = 0, n_branch = 0, n_linear = 0, n_high = 0;
     double   tip_mult_sum = 0.0, branch_mult_sum = 0.0;
 
-    for (uint64_t i = 0; i < n; i += stride) {
+#pragma omp parallel for schedule(dynamic,256) \
+    reduction(+:n_valid,n_tips,n_branch,n_linear,n_high,tip_mult_sum,branch_mult_sum)
+    for (int64_t j = 0; j < m; ++j) {
+        uint64_t i = indices[j];
         if (!dbg.IsValidEdge(i)) continue;
         ++n_valid;
 
         const int    indeg  = dbg.EdgeIndegree(i);
         const int    outdeg = dbg.EdgeOutdegree(i);
-        const double m      = dbg.EdgeMultiplicity(i);
+        const double mul    = dbg.EdgeMultiplicity(i);
 
         if (outdeg == 0 || indeg == 0) {
             ++n_tips;
-            tip_mult_sum += m;
+            tip_mult_sum += mul;
         }
         if (indeg >= 2 || outdeg >= 2) {
             ++n_branch;
-            branch_mult_sum += m;
+            branch_mult_sum += mul;
         }
         if (indeg == 1 && outdeg == 1) ++n_linear;
         if ((indeg + outdeg) >= 4)     ++n_high;
@@ -219,13 +254,20 @@ double ExtractMeanTipLength(SDBG& dbg, const ExtractionOptions& opts) {
     const uint64_t n      = dbg.size();
     const uint64_t stride = std::max(uint64_t(1), n / opts.sample_size);
 
+    std::vector<uint64_t> indices;
+    indices.reserve(opts.sample_size + 1);
+    for (uint64_t i = 0; i < n; i += stride) indices.push_back(i);
+    const int64_t m = static_cast<int64_t>(indices.size());
+
     uint64_t n_tips      = 0;
     uint64_t total_steps = 0;
 
-    for (uint64_t i = 0; i < n; i += stride) {
+#pragma omp parallel for schedule(dynamic,128) reduction(+:n_tips,total_steps)
+    for (int64_t j = 0; j < m; ++j) {
+        uint64_t i = indices[j];
         if (!dbg.IsValidEdge(i)) continue;
-        if (dbg.EdgeOutdegree(i) != 0) continue; // only tail tips
-        if (dbg.EdgeIndegree(i)  == 0) continue; // isolated edge — skip
+        if (dbg.EdgeOutdegree(i) != 0) continue;
+        if (dbg.EdgeIndegree(i)  == 0) continue;
 
         ++n_tips;
         uint64_t cur    = i;
@@ -253,12 +295,21 @@ BubbleFeatures ExtractBubbleFeatures(SDBG& dbg,
     const uint64_t n      = dbg.size();
     const uint64_t stride = std::max(uint64_t(1), n / opts.sample_size);
 
+    std::vector<uint64_t> indices;
+    indices.reserve(opts.sample_size + 1);
+    for (uint64_t i = 0; i < n; i += stride) indices.push_back(i);
+    const int64_t m = static_cast<int64_t>(indices.size());
+
     uint64_t n_branching  = 0;
     uint64_t n_bubbles    = 0;
     uint64_t n_error      = 0;
     uint64_t n_balanced   = 0;
 
-    for (uint64_t i = 0; i < n; i += stride) {
+    // Each bubble walk is independent — dynamic schedule handles variable cost.
+#pragma omp parallel for schedule(dynamic,64) \
+    reduction(+:n_branching,n_bubbles,n_error,n_balanced)
+    for (int64_t j = 0; j < m; ++j) {
+        uint64_t i = indices[j];
         if (!dbg.IsValidEdge(i)) continue;
         if (dbg.EdgeOutdegree(i) != 2) continue;
 

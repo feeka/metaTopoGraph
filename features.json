@@ -1,0 +1,32 @@
+{
+  "histogram": {
+    "valley_position": 2,
+    "valley_depth": 1.34302,
+    "mult_1_fraction": 2.71637e-07,
+    "mean_node_multiplicity": 105.396,
+    "multiplicity_cv": 0.294038,
+    "n_signal_modes": 39,
+    "primary_mode_depth": 102,
+    "high_mult_tail_ratio": 0.00489971
+  },
+  "node": {
+    "tip_density": 0,
+    "branching_node_fraction": 0.00392851,
+    "linear_node_fraction": 0.996071,
+    "high_degree_node_fraction": 0.000259901,
+    "mult_at_tips": 0,
+    "mult_at_branches": 222.331
+  },
+  "walk": {
+    "mean_tip_length": 0,
+    "bubble_density": 0,
+    "error_bubble_fraction": 0,
+    "balanced_bubble_fraction": 0
+  },
+  "timing": {
+    "histogram_ms": 959.893,
+    "node_ms": 135.933,
+    "walk_ms": 54.4719,
+    "bubble_ms": 57.3695
+  }
+}
