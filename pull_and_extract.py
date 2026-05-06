@@ -79,6 +79,7 @@ DEFAULT_MAX_SPOTS = 3_000_000  # paired spots -> ~900 MB at 150 bp PE
 
 ESEARCH  = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 ESUMMARY = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
+ENA_FILEREPORT = "https://www.ebi.ac.uk/ena/portal/api/filereport"
 
 # Seconds to wait between NCBI API calls.
 # Without an API key NCBI allows 3 req/s; with a key 10 req/s.
@@ -229,8 +230,104 @@ def find_r1_r2(fastq_dir: str):
     return r1, r2
 
 
-# Detected at startup by _probe_fasterq_flags()
-_FASTERQ_SPOT_FLAG: str = "none"   # 'NX', 'maxSpotCount', or 'none'
+# ---------------------------------------------------------------------------
+# ENA direct FASTQ download (fast: HTTP stream, no sra-tools join phase)
+# ---------------------------------------------------------------------------
+
+def get_ena_fastq_urls(acc: str) -> list:
+    """
+    Query ENA portal API for direct gzip FASTQ download URLs.
+    Returns a list of HTTPS URLs (R1 first, R2 second for PE), or [] on failure.
+    ENA mirrors almost all SRA runs; the FTP paths convert 1:1 to HTTPS.
+    """
+    params = urllib.parse.urlencode({
+        "accession": acc,
+        "result":    "read_run",
+        "fields":    "fastq_ftp",
+        "format":    "tsv",
+    })
+    try:
+        with urllib.request.urlopen(
+                f"{ENA_FILEREPORT}?{params}", timeout=30) as r:
+            text = r.read().decode(errors="replace")
+        lines = [l for l in text.strip().split("\n") if l]
+        if len(lines) < 2:
+            return []
+        # Data row: fastq_ftp column is semicolon-separated ftp paths
+        ftp_field = lines[1].split("\t")[0]
+        urls = []
+        for raw in ftp_field.split(";"):
+            raw = raw.strip()
+            if not raw:
+                continue
+            # Convert ftp://... or bare path to https://
+            if raw.startswith("ftp://"):
+                raw = "https://" + raw[len("ftp://"):]
+            elif not raw.startswith("http"):
+                raw = "https://" + raw
+            urls.append(raw)
+        return sorted(urls)   # _1 before _2
+    except Exception as exc:
+        print(f"  [INFO] ENA lookup failed ({exc})", flush=True)
+        return []
+
+
+def stream_fastq(url: str, dest: str, max_reads: int):
+    """
+    Stream a gzip FASTQ from `url`, write only the first `max_reads` reads
+    to `dest` (also gzip).  Closes the connection early once the limit is hit
+    -- no need to download the rest of the file.
+    """
+    max_lines = max_reads * 4
+    req = urllib.request.Request(url, headers={"Accept-Encoding": "identity"})
+    CHUNK = 1 << 20  # 1 MB read buffer
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        raw_stream = gzip.GzipFile(fileobj=resp)
+        with gzip.open(dest, "wt") as out:
+            buf = b""
+            lines_written = 0
+            done = False
+            while not done:
+                chunk = raw_stream.read(CHUNK)
+                if not chunk:
+                    break
+                buf += chunk
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    out.write(line.decode(errors="replace") + "\n")
+                    lines_written += 1
+                    if lines_written >= max_lines:
+                        done = True
+                        break
+
+
+def download_via_ena(acc: str, fastq_dir: str, max_spots: int) -> bool:
+    """
+    Download paired (or SE) FASTQ files directly from ENA, capped at
+    max_spots reads per file.  Returns True on success.
+    """
+    urls = get_ena_fastq_urls(acc)
+    if not urls:
+        return False
+    os.makedirs(fastq_dir, exist_ok=True)
+    for url in urls:
+        fname = os.path.basename(url.split("?")[0])
+        if not fname.endswith(".gz"):
+            fname += ".gz"
+        dest = os.path.join(fastq_dir, fname)
+        print(f"  Streaming {fname} from ENA (max {max_spots:,} reads) ...",
+              flush=True)
+        try:
+            stream_fastq(url, dest, max_spots)
+        except Exception as exc:
+            print(f"  [WARN] ENA stream failed for {url}: {exc}", flush=True)
+            if os.path.exists(dest):
+                os.remove(dest)
+            return False
+    return True
+
+
+# Detected at startup by _probe_fasterq_flags() -- only used as fallback
 
 
 def _probe_fasterq_flags() -> str:
@@ -271,36 +368,35 @@ def _truncate_fastq(path: str, max_reads: int):
     os.replace(tmp, path)
 
 # ---------------------------------------------------------------------------
-# Download
+# Download  (ENA stream first, fasterq-dump fallback)
 # ---------------------------------------------------------------------------
 
 
 def download_accession(acc: str, fastq_dir: str, max_spots: int,
                         threads: int, use_fasterq: bool) -> bool:
+    # ---- Try ENA direct stream first (fast, no join phase) ----
+    if download_via_ena(acc, fastq_dir, max_spots):
+        return True
+    print("  ENA unavailable, falling back to fasterq-dump ...", flush=True)
+    if not use_fasterq:
+        print("  [WARN] fasterq-dump not in PATH either.", flush=True)
+        return False
+    # ---- fasterq-dump fallback ----
     os.makedirs(fastq_dir, exist_ok=True)
-    if use_fasterq:
-        cmd = ["fasterq-dump", acc,
-               "--outdir",  fastq_dir,
-               "--split-3",
-               "--threads", str(threads),
-               "--progress"]
-        if _FASTERQ_SPOT_FLAG == "NX":
-            cmd += ["-N", "1", "-X", str(max_spots)]
-        elif _FASTERQ_SPOT_FLAG == "maxSpotCount":
-            cmd += ["--maxSpotCount", str(max_spots)]
-        # else: no flag — download all, truncate below
-    else:
-        cmd = ["fastq-dump", acc,
-               "--outdir",       fastq_dir,
-               "--split-3",
-               "--gzip",
-               "--maxSpotCount", str(max_spots)]
+    cmd = ["fasterq-dump", acc,
+           "--outdir",  fastq_dir,
+           "--split-3",
+           "--threads", str(threads),
+           "--progress"]
+    if _FASTERQ_SPOT_FLAG == "NX":
+        cmd += ["-N", "1", "-X", str(max_spots)]
+    elif _FASTERQ_SPOT_FLAG == "maxSpotCount":
+        cmd += ["--maxSpotCount", str(max_spots)]
     rc = run_cmd(cmd, check=False)
     if rc != 0:
-        print(f"  [WARN] Download failed (exit {rc})", flush=True)
+        print(f"  [WARN] fasterq-dump failed (exit {rc})", flush=True)
         return False
-    # Truncate if fasterq-dump has no native spot cap
-    if use_fasterq and _FASTERQ_SPOT_FLAG == "none":
+    if _FASTERQ_SPOT_FLAG == "none":
         print(f"  Truncating to {max_spots:,} spots ...", flush=True)
         for fname in os.listdir(fastq_dir):
             if fname.endswith(".fastq") or fname.endswith(".fastq.gz"):
@@ -455,8 +551,8 @@ def main():
             if not ok:
                 rows.append([name, acc, title, biome, 0, 0, "download_failed"])
                 continue
-            if use_fasterq:
-                compress_uncompressed(str(fastq_dir))
+            # ENA gives .fastq.gz directly; fasterq-dump fallback gives .fastq
+            compress_uncompressed(str(fastq_dir))
         else:
             if not fastq_dir.exists():
                 print(f"  [SKIP] {fastq_dir} does not exist")
