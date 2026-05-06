@@ -60,8 +60,30 @@ static std::string FindMegahitCore(const std::string& bin_dir) {
     return "";
 }
 
-// Invoke megahit_core read2sdbg and return the SDBG prefix.
-static std::string BuildSdbgFromReads(const std::string& reads_file,
+// Write a MEGAHIT reads-lib text file.  Format per MEGAHIT source:
+//   <metadata line>   <- any string (used for logging)
+//   <type> <file1> [<file2>]
+// Then megahit_core buildlib converts it to .bin + .lib_info,
+// and megahit_core read2sdbg consumes those binary files.
+static void WriteLibFile(const std::string& reads1,
+                         const std::string& reads2,   // empty for SE
+                         const std::string& lib_path) {
+    FILE* f = fopen(lib_path.c_str(), "w");
+    if (!f)
+        throw std::runtime_error("Cannot create lib file: " + lib_path);
+    if (reads2.empty()) {
+        fprintf(f, "%s\nse %s\n", reads1.c_str(), reads1.c_str());
+    } else {
+        fprintf(f, "%s,%s\npe %s %s\n",
+                reads1.c_str(), reads2.c_str(),
+                reads1.c_str(), reads2.c_str());
+    }
+    fclose(f);
+}
+
+// Invoke megahit_core {buildlib, read2sdbg} and return the SDBG prefix.
+static std::string BuildSdbgFromReads(const std::string& reads1,
+                                      const std::string& reads2,  // empty = SE
                                       const std::string& bin_dir,
                                       const std::string& tmp_dir,
                                       int n_threads,
@@ -76,25 +98,44 @@ static std::string BuildSdbgFromReads(const std::string& reads_file,
     if (!MakeDir(tmp_dir))
         throw std::runtime_error("Cannot create temp directory: " + tmp_dir);
 
-    const std::string prefix = tmp_dir + PATH_SEP + "k21";
-    const uint64_t mem_bytes = static_cast<uint64_t>(host_mem_gb * 1073741824.0);
+    // ---- Step 1: write lib text file and convert FASTQ to binary ----
+    const std::string lib_prefix = tmp_dir + PATH_SEP + "reads_lib";
+    WriteLibFile(reads1, reads2, lib_prefix + ".txt");
 
-    std::ostringstream cmd;
-    cmd << "\"" << core << "\" read2sdbg"
-        << " --kmer_k 21"
-        << " --min_kmer_frequency " << min_count
-        << " --read_lib_file \""    << reads_file << "\""
-        << " --output_prefix \""    << prefix     << "\""
-        << " --num_cpu_threads "    << n_threads
-        << " --host_mem "           << mem_bytes
-        << " --need_mercy 1";
+    {
+        std::ostringstream cmd;
+        cmd << "\"" << core << "\" buildlib"
+            << " \"" << lib_prefix << ".txt\""
+            << " \"" << lib_prefix << "\"";
+        std::cerr << "buildlib: " << cmd.str() << "\n";
+        int ret = system(cmd.str().c_str());
+        if (ret != 0)
+            throw std::runtime_error(
+                "megahit_core buildlib failed (exit " + std::to_string(ret) + ")");
+    }
 
-    std::cerr << "Building SDBG: " << cmd.str() << "\n";
-    int ret = system(cmd.str().c_str());
-    if (ret != 0)
-        throw std::runtime_error(
-            "megahit_core read2sdbg failed (exit " + std::to_string(ret) + ")");
-    return prefix;
+    // ---- Step 2: build SDBG from the binary lib ----
+    const std::string sdbg_prefix = tmp_dir + PATH_SEP + "k21";
+    const uint64_t    mem_bytes   = static_cast<uint64_t>(host_mem_gb * 1073741824.0);
+
+    {
+        std::ostringstream cmd;
+        cmd << "\"" << core << "\" read2sdbg"
+            << " --kmer_k 21"
+            << " --min_kmer_frequency " << min_count
+            << " --read_lib_file \""    << lib_prefix   << "\""
+            << " --output_prefix \""    << sdbg_prefix  << "\""
+            << " --num_cpu_threads "    << n_threads
+            << " --host_mem "           << mem_bytes
+            << " --need_mercy 1";
+        std::cerr << "read2sdbg: " << cmd.str() << "\n";
+        int ret = system(cmd.str().c_str());
+        if (ret != 0)
+            throw std::runtime_error(
+                "megahit_core read2sdbg failed (exit " + std::to_string(ret) + ")");
+    }
+
+    return sdbg_prefix;
 }
 
 // ---------------------------------------------------------------------------
@@ -105,16 +146,19 @@ static void PrintUsage(const char* prog) {
     std::cerr
         << "Usage:\n"
         << "  From pre-built SDBG:\n"
-        << "    " << prog << " --graph <sdbg_prefix> --output <features.json> [options]\n\n"
-        << "  From reads (builds SDBG, extracts, then deletes the SDBG):\n"
-        << "    " << prog << " --reads <reads.fa/fq[.gz]> --output <features.json> [options]\n\n"
+        << "    " << prog << " --graph <sdbg_prefix> --output <out.json> [options]\n\n"
+        << "  From single-end reads:\n"
+        << "    " << prog << " --reads <reads.fa/fq[.gz]> --output <out.json> [options]\n\n"
+        << "  From paired-end reads:\n"
+        << "    " << prog << " --reads <R1.fq.gz> --reads2 <R2.fq.gz> --output <out.json> [options]\n\n"
         << "Options:\n"
-        << "  --graph    SDBG file prefix (opens <prefix>.sdbg_info + <prefix>.sdbg.*)\n"
-        << "  --reads    Input FASTA/FASTQ reads file (triggers SDBG build at k=21)\n"
-        << "  --output   Output JSON file path\n"
-        << "  --sample   Edges to sample for node/walk/bubble phases (default 100000)\n"
-        << "  --threads  OpenMP threads (default: all available)\n"
-        << "  --mem      Memory for SDBG build in GB, reads mode only (default 8.0)\n"
+        << "  --graph      SDBG file prefix\n"
+        << "  --reads      R1 (or SE) FASTA/FASTQ reads file\n"
+        << "  --reads2     R2 FASTA/FASTQ file (paired-end only)\n"
+        << "  --output     Output JSON file path\n"
+        << "  --sample     Edges to sample for node/walk/bubble phases (default 100000)\n"
+        << "  --threads    OpenMP threads (default: all available)\n"
+        << "  --mem        Memory for SDBG build in GB, reads mode only (default 8.0)\n"
         << "  --min-count  Min k-mer frequency for SDBG build (default 2)\n";
 }
 
@@ -125,6 +169,7 @@ static void PrintUsage(const char* prog) {
 int main(int argc, char** argv) {
     std::string graph_prefix;
     std::string reads_file;
+    std::string reads2_file;
     std::string output_path;
     ExtractionOptions opts;
     int     n_threads  = 0;
@@ -135,6 +180,7 @@ int main(int argc, char** argv) {
         std::string arg(argv[i]);
         if      (arg == "--graph"     && i + 1 < argc) graph_prefix = argv[++i];
         else if (arg == "--reads"     && i + 1 < argc) reads_file   = argv[++i];
+        else if (arg == "--reads2"    && i + 1 < argc) reads2_file  = argv[++i];
         else if (arg == "--output"    && i + 1 < argc) output_path  = argv[++i];
         else if (arg == "--sample"    && i + 1 < argc) opts.sample_size = static_cast<uint64_t>(std::atoll(argv[++i]));
         else if (arg == "--threads"   && i + 1 < argc) n_threads    = std::atoi(argv[++i]);
@@ -143,6 +189,11 @@ int main(int argc, char** argv) {
         else { std::cerr << "Unknown argument: " << arg << "\n"; PrintUsage(argv[0]); return 1; }
     }
 
+    if (!reads2_file.empty() && reads_file.empty()) {
+        std::cerr << "Error: --reads2 requires --reads (R1 file)\n";
+        PrintUsage(argv[0]);
+        return 1;
+    }
     if (output_path.empty() || (graph_prefix.empty() == reads_file.empty())) {
         // both empty or both set
         PrintUsage(argv[0]);
@@ -171,7 +222,8 @@ int main(int argc, char** argv) {
                     );
         owns_tmp = true;
         try {
-            graph_prefix = BuildSdbgFromReads(reads_file, bin_dir, tmp_dir,
+            graph_prefix = BuildSdbgFromReads(reads_file, reads2_file,
+                                              bin_dir, tmp_dir,
                                               n_threads > 0 ? n_threads : 1,
                                               mem_gb, min_count);
         } catch (const std::exception& e) {
