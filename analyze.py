@@ -63,7 +63,7 @@ def load_data(input_dir: Path) -> pd.DataFrame:
         with open(f) as fh:
             d = json.load(fh)
         row = {"biome": biome}
-        for section in ("hist", "node", "walk"):
+        for section in ("histogram", "hist", "node", "walk"):
             if section in d:
                 for k, v in d[section].items():
                     row[k] = v
