@@ -1,5 +1,5 @@
-<p align="left">
-  <img src="icon.png" alt="metaTopoGraph" width="330"/>
+<p align="center">
+  <img src="icon.png" alt="metaTopoGraph" width="350"/>
 </p>
 
 Extracts 17 de Bruijn graph topology features from a MEGAHIT SDBG at k=21 by default.
