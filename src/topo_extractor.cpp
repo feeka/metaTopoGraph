@@ -162,7 +162,10 @@ HistogramFeatures ExtractHistogramFeatures(SDBG& dbg, double* out_valley_pos) {
         }
     }
     // Search for valley between mult=2 and halfway to the rough peak.
-    const uint32_t valley_upper = std::max(50u, rough_peak / 2);
+    // No large floor: if rough_peak is small (error-dominated histogram),
+    // rough_peak/2 correctly keeps the valley search inside the error tail
+    // so the primary-mode search can find the real signal peak beyond it.
+    const uint32_t valley_upper = std::max(5u, rough_peak / 2);
     uint32_t valley_pos = 2;
     double   valley_val = smoothed[2];
     for (uint32_t i = 3; i <= std::min(valley_upper, HIST_CAP); ++i) {

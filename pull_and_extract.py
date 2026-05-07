@@ -26,6 +26,7 @@ import csv
 import gzip
 import json
 import os
+import random
 import shutil
 import subprocess
 import sys
@@ -73,6 +74,37 @@ BIOME_QUERIES = [
      'acid mine drainage metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
     ("coral_reef",   "coral",
      'coral metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    # --- additional categories (brings total to 30) ---
+    ("arctic_ocean",     "arctic_marine",
+     'arctic ocean metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("mangrove",         "mangrove",
+     'mangrove metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("groundwater",      "groundwater",
+     'groundwater metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("rice_paddy",       "rice_paddy",
+     'rice paddy metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("compost",          "compost",
+     'compost metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("cave",             "cave",
+     'cave metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("human_lung",       "lung",
+     'lung metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("human_vaginal",    "vaginal",
+     'vaginal metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("peat_bog",         "peat",
+     'peat metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("desert_soil",      "desert",
+     'desert metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("activated_sludge", "sludge",
+     'activated sludge metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("termite_gut",      "termite",
+     'termite gut metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("rhizosphere",      "rhizosphere",
+     'rhizosphere metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("deep_subsurface",  "subsurface",
+     'subsurface metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("biofilm",          "biofilm",
+     'biofilm metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
 ]
 
 DEFAULT_MAX_SPOTS = 3_000_000  # paired spots -> ~900 MB at 150 bp PE
@@ -102,29 +134,29 @@ def _ncbi_get(url: str, params: dict) -> bytes:
 # SRA accession resolution (live NCBI query, no hard-coded IDs)
 # ---------------------------------------------------------------------------
 
-def resolve_accession(query: str) -> tuple:
+def resolve_accessions(query: str, count: int = 1) -> list:
     """
-    Query NCBI SRA for `query`, return the first run that looks like a
-    metagenome of reasonable size: (accession, title, total_spots).
-    Returns (None, None, None) on any failure.
+    Query NCBI SRA for `query`, return up to `count` qualifying runs.
+    Each entry is (accession, title, total_spots).
+    Runs with < 50 MB raw bases are skipped; at most one run is taken per
+    SRA experiment to keep accessions diverse.
     """
-    # Step 1: get UIDs matching the query
+    retmax = min(500, max(50, count * 10))
     try:
         uids = json.loads(_ncbi_get(ESEARCH, {
             "db":      "sra",
             "term":    query,
-            "retmax":  "20",
+            "retmax":  str(retmax),
             "retmode": "json",
         }))["esearchresult"]["idlist"]
     except Exception as exc:
         print(f"  [WARN] NCBI esearch failed: {exc}", flush=True)
-        return None, None, None
+        return []
 
     if not uids:
         print("  [WARN] No SRA results for query.", flush=True)
-        return None, None, None
+        return []
 
-    # Step 2: fetch summaries and pick the first run with usable size
     try:
         sums = json.loads(_ncbi_get(ESUMMARY, {
             "db":      "sra",
@@ -133,14 +165,17 @@ def resolve_accession(query: str) -> tuple:
         }))
     except Exception as exc:
         print(f"  [WARN] NCBI esummary failed: {exc}", flush=True)
-        return None, None, None
+        return []
 
+    results: list = []
+    seen_accs: set = set()
     for uid in sums["result"].get("uids", []):
+        if len(results) >= count:
+            break
         rec = sums["result"][str(uid)]
         runs_xml = rec.get("runs", "")
         if not runs_xml:
             continue
-        # Each Run element: <Run acc="SRR..." total_spots="..." total_bases="..."/>
         try:
             root = ET.fromstring(f"<runs>{runs_xml}</runs>")
         except ET.ParseError:
@@ -149,14 +184,18 @@ def resolve_accession(query: str) -> tuple:
             acc   = run_elem.get("acc", "")
             bases = int(run_elem.get("total_bases", 0))
             spots = int(run_elem.get("total_spots", 0))
-            # Skip runs that are way too small or huge before capping
-            if bases < 50_000_000:      # < 50 MB raw bases: too sparse
+            if bases < 50_000_000:
                 continue
+            if acc in seen_accs:
+                continue
+            seen_accs.add(acc)
             title = rec.get("title", acc)
-            return acc, title, spots
+            results.append((acc, title, spots))
+            break  # one run per SRA experiment
 
-    print("  [WARN] No qualifying run found in the top results.", flush=True)
-    return None, None, None
+    if not results:
+        print("  [WARN] No qualifying run found in the top results.", flush=True)
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -452,7 +491,12 @@ def main():
     ap.add_argument("--megahit-topo", default="",
                     help="Path to megahit_topo binary (auto-detected if not given)")
     ap.add_argument("--max-spots", type=int, default=DEFAULT_MAX_SPOTS,
-                    help=f"Max SRA spots per run (default {DEFAULT_MAX_SPOTS:,})")
+                    help=f"Upper bound on SRA spots per run (default {DEFAULT_MAX_SPOTS:,}). "
+                         "Each dataset gets a random draw from [floor(max_spots/2), max_spots].")
+    ap.add_argument("--n-datasets", type=int, default=None, metavar="N",
+                    help="Total datasets to pull, spread evenly across all biome categories "
+                         "(e.g. 30 categories × 2 = 60, or 30 × 1 = 30). "
+                         "Defaults to 1 per category.")
     ap.add_argument("--threads", type=int, default=4,
                     help="Threads for fasterq-dump and megahit_topo (default 4)")
     ap.add_argument("--mem", type=float, default=None,
@@ -540,82 +584,115 @@ def main():
             names = [d[0] for d in BIOME_QUERIES]
             sys.exit(f"ERROR: No match. Available names:\n  {names}")
 
+    # How many datasets to fetch per biome category.
+    # --n-datasets 60 with 30 categories => 2 per category, etc.
+    per_cat = max(1, args.n_datasets // len(catalogue)) if args.n_datasets else 1
+    total_planned = per_cat * len(catalogue)
+    print(f"Biome categories : {len(catalogue)}  |  per-category : {per_cat}  |  planned total : {total_planned}")
+
     rows = []
 
     for (name, biome, query) in catalogue:
-        print(f"\n{'='*62}")
-        print(f"  {name}  biome={biome}")
-        print(f"{'='*62}")
 
-        fastq_dir   = datasets_dir / name / "fastq_files"
-        output_json = outputs_dir / f"features_{name}.json"
-
-        # ---- Resolve SRA accession ----
-        acc, title, total_spots = None, "", 0
-        if not args.skip_download:
+        # ---- Build list of (ds_name, acc, title, fastq_dir) instances ----
+        if args.skip_download:
+            # Collect any already-present directories for this category,
+            # e.g. "human_gut", "human_gut_1", "human_gut_2", ...
+            existing_dirs = sorted(
+                d for d in datasets_dir.iterdir()
+                if d.is_dir() and (d.name == name or d.name.startswith(name + "_"))
+            ) if datasets_dir.exists() else []
+            if not existing_dirs:
+                print(f"\n[SKIP] No existing directories found for {name}")
+                continue
+            instances = [
+                (d.name, d.name, "(existing)", d / "fastq_files")
+                for d in existing_dirs[:per_cat]
+            ]
+        else:
+            print(f"\n{'='*62}")
+            print(f"  {name}  biome={biome}  (querying {per_cat} accession(s))")
+            print(f"{'='*62}")
             print(f"  Querying NCBI SRA ...", flush=True)
-            acc, title, total_spots = resolve_accession(query)
-            if acc is None:
-                print(f"  [SKIP] Could not resolve accession for {name}")
+            accessions = resolve_accessions(query, per_cat)
+            if not accessions:
+                print(f"  [SKIP] Could not resolve any accession for {name}")
                 rows.append([name, "n/a", "", biome, 0, 0, "resolve_failed"])
                 continue
-            print(f"  Resolved: {acc}  ({title})", flush=True)
-            print(f"  Downloading (max {args.max_spots:,} spots) ...", flush=True)
-            ok = download_accession(acc, str(fastq_dir), args.max_spots,
-                                    args.threads, use_fasterq)
-            if not ok:
-                rows.append([name, acc, title, biome, 0, 0, "download_failed"])
+            instances = []
+            for idx, (acc, title, _spots) in enumerate(accessions):
+                ds_name = f"{name}_{idx+1}" if per_cat > 1 else name
+                instances.append((ds_name, acc, title, datasets_dir / ds_name / "fastq_files"))
+
+        # ---- Process each instance ----
+        for (ds_name, acc, title, fastq_dir) in instances:
+            print(f"\n{'='*62}")
+            print(f"  {ds_name}  biome={biome}")
+            print(f"{'='*62}")
+
+            output_json = outputs_dir / f"features_{ds_name}.json"
+
+            if not args.skip_download:
+                # Random spot count in [floor(max_spots/2), max_spots]
+                max_spots_this = random.randint(args.max_spots // 2, args.max_spots)
+                print(f"  Resolved: {acc}  ({title})", flush=True)
+                print(f"  Downloading (spots cap: {max_spots_this:,} — "
+                      f"random in [{args.max_spots//2:,}, {args.max_spots:,}]) ...",
+                      flush=True)
+                ok = download_accession(acc, str(fastq_dir), max_spots_this,
+                                        args.threads, use_fasterq)
+                if not ok:
+                    rows.append([ds_name, acc, title, biome, 0, 0, "download_failed"])
+                    continue
+            else:
+                if not fastq_dir.exists():
+                    print(f"  [SKIP] {fastq_dir} does not exist")
+                    continue
+
+            # ---- Locate FASTQ files ----
+            r1, r2 = find_r1_r2(str(fastq_dir))
+            if r1 is None:
+                print(f"  [WARN] No FASTQ files in {fastq_dir}")
+                rows.append([ds_name, acc, title, biome, 0, 0, "no_fastq"])
                 continue
-        else:
-            if not fastq_dir.exists():
-                print(f"  [SKIP] {fastq_dir} does not exist")
+
+            size_gb = dir_size_gb(str(fastq_dir))
+            n_reads = count_reads_in_dir(str(fastq_dir))
+            print(f"  FASTQ: {size_gb:.2f} GB  {n_reads:,} reads", flush=True)
+
+            # ---- Extract features ----
+            print(f"  Extracting -> {output_json.name} ...", flush=True)
+            cmd = [
+                topo,
+                "--reads",     r1,
+                "--output",    str(output_json),
+                "--sample",    str(args.sample),
+                "--threads",   str(args.threads),
+                *((["--mem", str(args.mem)] if args.mem is not None else [])),
+                "--min-count", str(args.min_count),
+            ]
+            if r2:
+                cmd += ["--reads2", r2]
+
+            t0 = time.time()
+            rc = run_cmd(cmd, check=False)
+            elapsed = time.time() - t0
+
+            if rc != 0:
+                print(f"  [WARN] megahit_topo failed (exit {rc})", flush=True)
+                rows.append([ds_name, acc, title, biome,
+                             f"{size_gb:.2f}", n_reads, "extraction_failed"])
                 continue
-            acc, title = name, "(existing)"
 
-        # ---- Locate FASTQ files ----
-        r1, r2 = find_r1_r2(str(fastq_dir))
-        if r1 is None:
-            print(f"  [WARN] No FASTQ files in {fastq_dir}")
-            rows.append([name, acc, title, biome, 0, 0, "no_fastq"])
-            continue
+            print(f"  OK ({elapsed:.1f}s)", flush=True)
 
-        size_gb = dir_size_gb(str(fastq_dir))
-        n_reads = count_reads_in_dir(str(fastq_dir))
-        print(f"  FASTQ: {size_gb:.2f} GB  {n_reads:,} reads", flush=True)
+            # ---- Delete FASTQ files (save disk) ----
+            if not args.keep_fastq:
+                print(f"  Deleting FASTQ files to save disk ...", flush=True)
+                shutil.rmtree(str(fastq_dir), ignore_errors=True)
 
-        # ---- Extract features ----
-        print(f"  Extracting -> {output_json.name} ...", flush=True)
-        cmd = [
-            topo,
-            "--reads",     r1,
-            "--output",    str(output_json),
-            "--sample",    str(args.sample),
-            "--threads",   str(args.threads),
-            *((["--mem", str(args.mem)] if args.mem is not None else [])),
-            "--min-count", str(args.min_count),
-        ]
-        if r2:
-            cmd += ["--reads2", r2]
-
-        t0 = time.time()
-        rc = run_cmd(cmd, check=False)
-        elapsed = time.time() - t0
-
-        if rc != 0:
-            print(f"  [WARN] megahit_topo failed (exit {rc})", flush=True)
-            rows.append([name, acc, title, biome,
-                         f"{size_gb:.2f}", n_reads, "extraction_failed"])
-            continue
-
-        print(f"  OK ({elapsed:.1f}s)", flush=True)
-
-        # ---- Delete FASTQ files (save disk) ----
-        if not args.keep_fastq:
-            print(f"  Deleting FASTQ files to save disk ...", flush=True)
-            shutil.rmtree(str(fastq_dir), ignore_errors=True)
-
-        rows.append([name, acc, title, biome,
-                     f"{size_gb:.2f}", n_reads, "ok"])
+            rows.append([ds_name, acc, title, biome,
+                         f"{size_gb:.2f}", n_reads, "ok"])
 
     # ---- Write TSV ----
     write_tsv(rows, str(tsv_path))
