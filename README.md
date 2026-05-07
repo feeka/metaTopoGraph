@@ -1,8 +1,6 @@
-<p align="center">
-  <img src="icon.png" alt="metaTopoGraph" width="220"/>
+<p align="left">
+  <img src="icon.png" alt="metaTopoGraph" width="330"/>
 </p>
-
-# metaTopoGraph
 
 Extracts 17 de Bruijn graph topology features from a MEGAHIT SDBG at k=21 by default.
 Runs as a standalone binary after `megahit_core` has written its SDBG to disk - no re-assembly.
