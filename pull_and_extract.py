@@ -105,6 +105,69 @@ BIOME_QUERIES = [
      'subsurface metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
     ("biofilm",          "biofilm",
      'biofilm metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    # --- human-associated (brings total to ~55) ---
+    ("human_nasal",      "nasal",
+     'nasal metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("human_urinary",    "urinary",
+     'urinary tract metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("human_gut_infant", "infant_gut",
+     'gut metagenome[organism] AND infant AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    # --- non-human animal gut ---
+    ("mouse_gut",        "mouse_gut",
+     'mouse gut metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("pig_gut",          "pig_gut",
+     'pig gut metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("chicken_gut",      "poultry_gut",
+     'chicken gut metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("insect_gut",       "insect_gut",
+     'insect gut metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("fish_gut",         "fish_gut",
+     'fish gut metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    # --- plant-associated ---
+    ("phyllosphere",     "phyllosphere",
+     'phyllosphere metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("plant_root",       "endosphere",
+     'plant metagenome[organism] AND endosphere AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    # --- aquatic variants ---
+    ("estuary",          "estuarine",
+     'estuary metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("river",            "riverine",
+     'river metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("lake_sediment",    "lake_sediment",
+     'lake sediment metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("tidal_flat",       "intertidal",
+     'tidal flat metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("saltmarsh",        "saltmarsh",
+     'salt marsh metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    # --- extreme / other geo ---
+    ("soda_lake",        "alkaline",
+     'soda lake metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("saline_lake",      "hypersaline",
+     'saline lake metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("glacier",          "cryosphere",
+     'glacier metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("antarctic_soil",   "polar_soil",
+     'Antarctic soil metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("tundra",           "tundra",
+     'tundra metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("wetland",          "wetland",
+     'wetland metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("oil_reservoir",    "oil_reservoir",
+     'oil reservoir metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    # --- engineered / built environments ---
+    ("drinking_water",   "drinking_water",
+     'drinking water metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("anaerobic_digester","anaerobic_digester",
+     'anaerobic digester metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("bioreactor",       "bioreactor",
+     'bioreactor metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("hospital_surface", "built_env",
+     'built environment metagenome[organism] AND hospital AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    # --- food / fermentation ---
+    ("fermented_food",   "fermented",
+     'food metagenome[organism] AND fermented AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
+    ("cheese",           "cheese",
+     'cheese metagenome[organism] AND WGS[strategy] AND PAIRED[layout] AND illumina[platform]'),
 ]
 
 DEFAULT_MAX_SPOTS = 3_000_000  # paired spots -> ~900 MB at 150 bp PE
@@ -505,6 +568,10 @@ def main():
                     help="Edges sampled per dataset for feature extraction (default 200000)")
     ap.add_argument("--min-count", type=int, default=2,
                     help="Min k-mer frequency for SDBG (default 2)")
+    ap.add_argument("--kmer-size", type=int, default=21,
+                    help="k-mer length for SDBG build (default 21, must be odd)")
+    ap.add_argument("--keep-graph", action="store_true",
+                    help="Keep the temporary SDBG directory after extraction")
     ap.add_argument("--keep-fastq", action="store_true",
                     help="Keep FASTQ files after extraction (default: delete them)")
     ap.add_argument("--skip-download", action="store_true",
@@ -670,6 +737,8 @@ def main():
                 "--threads",   str(args.threads),
                 *((["--mem", str(args.mem)] if args.mem is not None else [])),
                 "--min-count", str(args.min_count),
+                "--kmer-size", str(args.kmer_size),
+                *(("--keep-graph",) if args.keep_graph else ()),
             ]
             if r2:
                 cmd += ["--reads2", r2]

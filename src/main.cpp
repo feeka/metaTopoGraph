@@ -147,7 +147,8 @@ static std::string BuildSdbgFromReads(const std::string& reads1,
                                       const std::string& tmp_dir,
                                       int n_threads,
                                       double host_mem_gb,
-                                      int min_count) {
+                                      int min_count,
+                                      int kmer_k) {
     const std::string core = FindMegahitCore(bin_dir);
     if (core.empty())
         throw std::runtime_error(
@@ -174,7 +175,7 @@ static std::string BuildSdbgFromReads(const std::string& reads1,
     }
 
     // ---- Step 2: build SDBG from the binary lib ----
-    const std::string sdbg_prefix = tmp_dir + PATH_SEP + "k21";
+    const std::string sdbg_prefix = tmp_dir + PATH_SEP + "k" + std::to_string(kmer_k);
     const uint64_t    mem_bytes   = host_mem_gb > 0.0
         ? static_cast<uint64_t>(host_mem_gb * 1073741824.0)
         : AutoMemBytes();
@@ -182,7 +183,7 @@ static std::string BuildSdbgFromReads(const std::string& reads1,
     {
         std::ostringstream cmd;
         cmd << "\"" << core << "\" read2sdbg"
-            << " --kmer_k 21"
+            << " --kmer_k " << kmer_k
             << " --min_kmer_frequency " << min_count
             << " --read_lib_file \""    << lib_prefix   << "\""
             << " --output_prefix \""    << sdbg_prefix  << "\""
@@ -220,7 +221,9 @@ static void PrintUsage(const char* prog) {
         << "  --sample     Edges to sample for node/walk/bubble phases (default 100000)\n"
         << "  --threads    OpenMP threads (default: all available)\n"
         << "  --mem        Memory for SDBG build in GB, reads mode only (default: 90% of RAM)\n"
-        << "  --min-count  Min k-mer frequency for SDBG build (default 2)\n";
+        << "  --min-count  Min k-mer frequency for SDBG build (default 2)\n"
+        << "  --kmer-size  k-mer length for SDBG build (default 21, must be odd)\n"
+        << "  --keep-graph Keep the temporary SDBG directory after extraction\n";
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +239,8 @@ int main(int argc, char** argv) {
     int     n_threads  = 0;
     double  mem_gb     = 0.0;  // 0 = auto (90% of system RAM, matching MEGAHIT default)
     int     min_count  = 2;
+    int     kmer_size  = 21;
+    bool    keep_graph = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg(argv[i]);
@@ -247,6 +252,8 @@ int main(int argc, char** argv) {
         else if (arg == "--threads"   && i + 1 < argc) n_threads    = std::atoi(argv[++i]);
         else if (arg == "--mem"       && i + 1 < argc) mem_gb       = std::atof(argv[++i]);
         else if (arg == "--min-count" && i + 1 < argc) min_count    = std::atoi(argv[++i]);
+        else if (arg == "--kmer-size"  && i + 1 < argc) kmer_size    = std::atoi(argv[++i]);
+        else if (arg == "--keep-graph")                  keep_graph   = true;
         else { std::cerr << "Unknown argument: " << arg << "\n"; PrintUsage(argv[0]); return 1; }
     }
 
@@ -286,7 +293,7 @@ int main(int argc, char** argv) {
             graph_prefix = BuildSdbgFromReads(reads_file, reads2_file,
                                               bin_dir, tmp_dir,
                                               n_threads > 0 ? n_threads : 1,
-                                              mem_gb, min_count);
+                                              mem_gb, min_count, kmer_size);
         } catch (const std::exception& e) {
             std::cerr << "Error: " << e.what() << "\n";
             if (owns_tmp) RemoveDir(tmp_dir);
@@ -333,9 +340,11 @@ int main(int argc, char** argv) {
     }
 
     // ----- clean up temp SDBG -----
-    if (owns_tmp) {
+    if (owns_tmp && !keep_graph) {
         std::cerr << "Removing temp SDBG: " << tmp_dir << "\n";
         RemoveDir(tmp_dir);
+    } else if (owns_tmp && keep_graph) {
+        std::cerr << "Keeping SDBG at: " << tmp_dir << "\n";
     }
 
     return 0;
