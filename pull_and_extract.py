@@ -699,7 +699,18 @@ def main():
 
             output_json = outputs_dir / f"features_{ds_name}.json"
 
-            if not args.skip_download:
+            # ---- Short-circuit: features already extracted ----
+            if output_json.exists():
+                print(f"  [SKIP] {output_json.name} already exists — skipping.")
+                rows.append([ds_name, acc, title, biome, "-", "-", "already_done"])
+                continue
+
+            # ---- Short-circuit: FASTQ already present, skip download ----
+            fastq_ready = fastq_dir.exists() and find_r1_r2(str(fastq_dir))[0] is not None
+            if fastq_ready:
+                print(f"  [REUSE] FASTQ files found in {fastq_dir} — skipping download.")
+
+            if not fastq_ready and not args.skip_download:
                 # Random spot count in [floor(max_spots/2), max_spots]
                 max_spots_this = random.randint(args.max_spots // 2, args.max_spots)
                 print(f"  Resolved: {acc}  ({title})", flush=True)
@@ -711,10 +722,9 @@ def main():
                 if not ok:
                     rows.append([ds_name, acc, title, biome, 0, 0, "download_failed"])
                     continue
-            else:
-                if not fastq_dir.exists():
-                    print(f"  [SKIP] {fastq_dir} does not exist")
-                    continue
+            elif not fastq_ready and args.skip_download:
+                print(f"  [SKIP] {fastq_dir} does not exist and --skip-download is set")
+                continue
 
             # ---- Locate FASTQ files ----
             r1, r2 = find_r1_r2(str(fastq_dir))
