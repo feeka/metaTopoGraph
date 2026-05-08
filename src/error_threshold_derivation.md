@@ -1,97 +1,77 @@
-# Bayesian Error Threshold Derivation
+# Error Threshold Derivation
 
-## Goal
-
-Given only the graph output, find the multiplicity $m^*$ where:
-
-> "An edge with multiplicity $\leq m^*$ is more likely a sequencing error than a real genome k-mer."
+We want a multiplicity cutoff $m^*$ such that any edge with count $\leq m^*$ is more likely a sequencing error than a real genomic k-mer — derived purely from numbers already in the JSON output.
 
 ---
 
-## Step 1 — What is real genome coverage?
+## Step 1 — Reading off the real coverage
 
-`mean_max_branch_ratio` = $C_{real}$
+`mean_max_branch_ratio` is $C_{real}$.
 
-At a branching node, the dominant outgoing edge is the real genome path (high multiplicity), and the other is an error branch (multiplicity ≈ 1). The ratio between them is $C_{real} / 1 = C_{real}$.
+At any branch, one outgoing edge is the true genome path (high multiplicity) and the other is an error (multiplicity ≈ 1). Their ratio is just $C_{real}$, so this feature directly encodes sequencing depth.
 
-**Example:** `mean_max_branch_ratio = 29` → real coverage = 29×.
-
----
-
-## Step 2 — How many error edges are there?
-
-The graph has two kinds of edges mixed together:
-- **Real** edges: multiplicity ≈ $C_{real}$, there are $E_{real}$ of them
-- **Error** edges: multiplicity ≈ 1, there are $E_{err}$ of them
-
-The overall mean is just a weighted average:
-
-$$\text{mult\_mean} = \frac{C_{real} \cdot E_{real} + 1 \cdot E_{err}}{E_{real} + E_{err}}$$
-
-Solve for the ratio $E_{err}/E_{real}$:
-
-$$\frac{E_{err}}{E_{real}} = \frac{C_{real} - \text{mult\_mean}}{\text{mult\_mean} - 1}$$
-
-**Example:** $C_{real}=29$, `mult_mean=12.44`:
-
-$$\frac{E_{err}}{E_{real}} = \frac{29 - 12.44}{12.44 - 1} = \frac{16.56}{11.44} = 1.45$$
-
-There are 1.45× more error edges than real edges in the graph.
+**Example:** `mean_max_branch_ratio = 29` means the genome was sequenced at ~29×.
 
 ---
 
-## Step 3 — What is the Poisson rate of error edges?
+## Step 2 — How many errors are in the graph?
 
-A specific error k-mer (e.g. the 21-mer that results from the mutation A→C at position 7 of read 1234) appears in a new read only if that read has the **exact same mutation at the exact same position**. That probability is:
+Every edge is either a real k-mer (appears ~$C_{real}$ times) or an error k-mer (appears ~1 time). The overall mean $\bar{m}$ (`mult_mean`) is a weighted average of those two populations:
 
-$$\frac{p}{3}$$
+$$\bar{m} = \frac{C_{real} \cdot E_{real} + 1 \cdot E_{err}}{E_{real} + E_{err}}$$
 
-where $p$ = per-base error rate, and $3$ = number of wrong bases possible at any position (DNA has 4 bases, 1 is correct, 3 are wrong).
+Rearranging gives the error-to-real ratio:
 
-So the Poisson rate for a specific error k-mer is:
+$$r = \frac{E_{err}}{E_{real}} = \frac{C_{real} - \bar{m}}{\bar{m} - 1}$$
+
+**Example:** $C_{real}=29$, $\bar{m}=12.44$:
+
+$$r = \frac{29 - 12.44}{12.44 - 1} = \frac{16.56}{11.44} = 1.45$$
+
+There are 45% more error edges than real genome edges — which makes sense at 29× coverage with ~2% error rate.
+
+---
+
+## Step 3 — Poisson rate of an error k-mer
+
+A specific error k-mer only reappears if another read independently makes the same mistake at the same position. With per-base error rate $p$ and 3 possible wrong bases, that probability is $p/3$ per read. Across $C_{real}$ reads:
 
 $$\lambda_e = C_{real} \cdot \frac{p}{3}$$
 
-We don't know $p$ directly, but we can get it from:
+We don't observe $p$ directly, but we can infer it: the total number of distinct error k-mers is roughly $E_{err} \approx N_{reads} \cdot k \cdot p$, and real k-mers satisfy $E_{real} \approx N_{reads} \cdot k / C_{real}$, so:
 
-$$E_{err} \approx N_{obs} \cdot k \cdot p \quad \Rightarrow \quad p = \frac{E_{err}/E_{real}}{k \cdot C_{real}} = \frac{\text{ratio}}{k \cdot C_{real}}$$
+$$p = \frac{r}{k \cdot C_{real}} \quad \Rightarrow \quad \lambda_e = \frac{r}{3k}$$
 
-Substituting back:
+**Example:** $r=1.45$, $k=21$:
 
-$$\lambda_e = C_{real} \cdot \frac{p}{3} = \frac{\text{ratio}}{3k}$$
+$$\lambda_e = \frac{1.45}{63} \approx 0.023$$
 
-**Example:** ratio=1.45, k=21:
-
-$$\lambda_e = \frac{1.45}{3 \times 21} = 0.023$$
+An error k-mer appears on average 0.023 times — almost always just once, occasionally zero.
 
 ---
 
-## Step 4 — The crossover multiplicity $m^*$
+## Step 4 — Where the two populations cross
 
-Model each edge's count as Poisson. An edge with multiplicity $m$ is equally likely to be real or error when their Poisson likelihoods match, weighted by how many of each kind exist:
+Model edge counts as Poisson: real edges from $\text{Pois}(C_{real})$, error edges from $\text{Pois}(\lambda_e)$. The crossover $m^*$ is where the posterior probability of being real equals that of being an error:
 
-$$E_{real} \cdot \text{Poisson}(m \mid \lambda_r) = E_{err} \cdot \text{Poisson}(m \mid \lambda_e)$$
+$$E_{real} \cdot e^{-C_{real}} C_{real}^m = E_{err} \cdot e^{-\lambda_e} \lambda_e^m$$
 
-Take $\ln$ of both sides (the $m!$ cancels):
+Take $\ln$ (the $m!$ cancels), then solve for $m$:
 
-$$\ln E_{real} + m \ln\lambda_r - \lambda_r = \ln E_{err} + m \ln\lambda_e - \lambda_e$$
+$$\boxed{m^* = \frac{\ln(r) + (C_{real} - \lambda_e)}{\ln(C_{real} / \lambda_e)}}$$
 
-Solve for $m$:
+**Example:** $r=1.45$, $C_{real}=29$, $\lambda_e=0.023$:
 
-$$\boxed{m^* = \frac{\ln(E_{err}/E_{real}) + (\lambda_r - \lambda_e)}{\ln(\lambda_r / \lambda_e)}}$$
+$$m^* = \frac{\ln(1.45) + (29 - 0.023)}{\ln(29 / 0.023)} = \frac{0.37 + 28.98}{7.14} \approx 4.1$$
 
-**Example:** ratio=1.45, $\lambda_r=29$, $\lambda_e=0.023$:
-
-$$m^* = \frac{\ln(1.45) + (29 - 0.023)}{\ln(29 / 0.023)} = \frac{0.37 + 28.98}{7.14} = \frac{29.35}{7.14} = 4.1$$
-
-→ **Edges with multiplicity ≤ 4 are more likely errors than real genome sequence.**
+Any edge with multiplicity $\leq 4$ is more likely noise than signal.
 
 ---
 
-## Canonical graph note
+## Canonical k-mer note
 
-MEGAHIT stores the lexicographically smaller of a k-mer and its reverse complement. A substitution on the forward strand and the complementary substitution on the reverse strand can produce the **same canonical k-mer**, so two independent reads can create the same error edge. This doubles $\lambda_e$:
+MEGAHIT stores only the lexicographically smaller of a k-mer and its reverse complement. A substitution on the forward strand and the complementary substitution on the reverse strand can hash to the same canonical k-mer, so two independent reads can increment the same error edge — effectively doubling $\lambda_e$:
 
-$$\lambda_e^{\text{canonical}} = \frac{\text{ratio}}{1.5k}$$
+$$\lambda_e^{\text{canonical}} = \frac{r}{1.5k}$$
 
-The implementation uses `3.0 * kmer_k` (not canonical-corrected) — the correction is small (~0.3 in $m^*$) and conservative (errs toward flagging fewer edges as errors).
+The current implementation uses the non-canonical formula (`3.0 * kmer_k`), which is conservative: it underestimates $\lambda_e$, so $m^*$ lands slightly lower, meaning we flag fewer edges as errors when uncertain. The difference is about 0.3 in $m^*$.
