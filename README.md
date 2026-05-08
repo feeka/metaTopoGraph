@@ -47,17 +47,6 @@ git clone --recurse-submodules https://github.com/feeka/metaTopoGraph.git
 git submodule update --init --recursive
 ```
 
-Use the provided build script (WSL / Linux):
-
-```bash
-bash build.sh
-```
-
-This builds MEGAHIT first, then `megahit_topo`, and symlinks the required
-`megahit_core_no_hw_accel` binary into the topo build directory.
-
-To build manually:
-
 ```bash
 # 1. build MEGAHIT
 cmake -S libs/megahit -B ~/megahit-build -DCMAKE_BUILD_TYPE=Release
@@ -73,15 +62,22 @@ Requires: CMake >= 3.5, C++14 compiler, zlib, OpenMP.
 ## Usage
 
 ```bash
-./megahit_topo --reads sample.fa --output features.json [--mem 16.0] [--min-count 2] [--threads 8]
+# single-end
+./megahit_topo --reads sample.fa --output features.json [--threads 8]
+
+# paired-end
+./megahit_topo --reads R1.fq.gz --reads2 R2.fq.gz --output features.json [--threads 8]
 ```
 
 ```
---reads       FASTA/FASTQ input (required)
---output      Output JSON path (required, must end in .json)
+--reads       R1 (or single-end) FASTA/FASTQ reads file (required)
+--reads2      R2 FASTA/FASTQ file for paired-end input (optional)
+--output      Output JSON path (required)
 --threads     OpenMP threads (default: all cores)
---mem         Memory for SDBG build in GB (default: 8.0)
---min-count   Min k-mer frequency; 2 filters most error k-mers at coverage >= 5x (default: 2)
+--mem         Memory for SDBG build in GB (default: 90% of system RAM)
+--min-count   Min k-mer frequency; use 2 to filter most error k-mers at coverage >= 5x (default: 1)
+--kmer-size   k-mer length (default: 21, must be odd)
+--keep-graph  Keep the temporary SDBG directory after extraction
 ```
 
 `megahit_core_no_hw_accel` (or `megahit_core`) must be present in the same directory as
@@ -107,63 +103,10 @@ and deleted on exit.
 }
 ```
 
-## Python scripts
-
-Three companion scripts cover the full dataset collection → analysis → visualisation workflow.
-They require Python >= 3.9 and `pandas`, `numpy`, `scipy`, `matplotlib`, `seaborn`.
-
-### `pull_and_extract.py` — bulk dataset collection
-
-Downloads public metagenomes from NCBI SRA, builds the SDBG with `megahit_topo`, and
-extracts features for each one. Supports 55 biome categories; each FASTQ is deleted
-immediately after extraction to save disk.
-
-```bash
-# pull 1 dataset per category (55 total, default)
-python pull_and_extract.py --build-dir /data/metagenomes --threads 8
-
-# pull 2 per category, randomise spot count between 1.5M–3M
-python pull_and_extract.py --n-datasets 110 --max-spots 3000000 --threads 8
-
-# keep raw reads and the SDBG for inspection
-python pull_and_extract.py --keep-fastq --keep-graph
-```
-
-```
---build-dir       Root output directory (default: build/metaTopoGraph)
---n-datasets N    Total datasets, spread evenly across categories (default: 1 per category)
---max-spots X     Upper spot cap; each dataset draws randomly from [X/2, X] (default: 3000000)
---kmer-size       k-mer length passed to SDBG build (default: 21)
---keep-fastq      Don't delete FASTQ after extraction
---keep-graph      Don't delete temporary SDBG
---threads         Threads for download and SDBG build (default: 4)
---ncbi-api-key    NCBI API key for higher rate limit (10 req/s)
-```
-
-### `analyze.py` — descriptive statistics and correlations
-
-Reads every `features_*.json` in a folder and produces CSVs and plots:
-summary statistics, Pearson/Spearman correlation matrices, and a hierarchical clustering heatmap.
-
-```bash
-python analyze.py --input build/metaTopoGraph/outputs --output results/
-```
-
-### `plot_features.py` — per-sample and multi-sample visualisation
-
-```bash
-# single sample
-python plot_features.py features.json
-
-# whole directory
-python plot_features.py build/metaTopoGraph/outputs/
-```
-
 ## Source layout
 
 ```
 CMakeLists.txt
-build.sh                 one-shot WSL/Linux build script
 libs/megahit/            upstream MEGAHIT (SDBG data structures, read-only)
 src/
   topo_features.h        NodeFeatures and TopoFeatures structs

@@ -222,7 +222,7 @@ static void PrintUsage(const char* prog) {
         << ""
         << "  --threads    OpenMP threads (default: all available)\n"
         << "  --mem        Memory for SDBG build in GB, reads mode only (default: 90% of RAM)\n"
-        << "  --min-count  Min k-mer frequency for SDBG build (default 2)\n"
+        << "  --min-count  Min k-mer frequency for SDBG build (default 1)\n"
         << "  --kmer-size  k-mer length for SDBG build (default 21, must be odd)\n"
         << "  --keep-graph Keep the temporary SDBG directory after extraction\n";
 }
@@ -239,7 +239,7 @@ int main(int argc, char** argv) {
     ExtractionOptions opts;
     int     n_threads  = 0;
     double  mem_gb     = 0.0;  // 0 = auto (90% of system RAM, matching MEGAHIT default)
-    int     min_count  = 2;
+    int     min_count  = 1;
     int     kmer_size  = 21;
     bool    keep_graph = false;
 

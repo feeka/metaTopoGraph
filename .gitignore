@@ -5,3 +5,4 @@ features.json
 build/
 plan/
 build.sh
+*.py
