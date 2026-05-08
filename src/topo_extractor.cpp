@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cassert>
 #include <chrono>
-#include <cmath>
 #include <limits>
 #include <vector>
 
@@ -14,38 +13,10 @@
 #include "sdbg/sdbg_def.h"
 
 // ---------------------------------------------------------------------------
-// Compute Bayesian error threshold m* from graph statistics.
-// Returns the multiplicity at which real and error Poisson posteriors are equal.
-// Edges with mult <= m* are more likely erroneous than real.
-// Returns 0.0 when coverage is too low to determine a meaningful threshold.
+// Full-scan node feature extraction (single pass)
 // ---------------------------------------------------------------------------
 
-static double ComputeErrorThreshold(double C_real, double mult_mean, double kmer_k) {
-    // Requires: C_real > 1, 1 < mult_mean < C_real
-    if (C_real <= 1.0 || mult_mean <= 1.0 || mult_mean >= C_real)
-        return 0.0;
-
-    // E_err/E_real from the mixture mean equation:
-    //   mult_mean = (C_real * E_real + 1 * E_err) / (E_real + E_err)
-    const double ratio = (C_real - mult_mean) / (mult_mean - 1.0);
-    if (ratio <= 0.0) return 0.0;
-
-    // p = ratio / (k * C_real),  lambda_e = C_real * p / 3
-    const double lambda_e = ratio / (3.0 * kmer_k);
-    if (lambda_e <= 0.0 || lambda_e >= C_real) return 0.0;
-
-    // m* = (ln(ratio) + (C_real - lambda_e)) / ln(C_real / lambda_e)
-    const double m_star = (std::log(ratio) + (C_real - lambda_e))
-                        / std::log(C_real / lambda_e);
-    return m_star < 0.0 ? 0.0 : m_star;
-}
-
-// ---------------------------------------------------------------------------
-// Full-scan node feature extraction (two passes)
-// ---------------------------------------------------------------------------
-
-NodeFeatures ExtractNodeFeatures(SDBG& dbg) {
-    const double kmer_k = static_cast<double>(dbg.k());
+NodeFeatures ExtractNodeFeatures(SDBG& dbg, uint64_t total_reads) {
 
 #ifdef _OPENMP
     const int nthreads = omp_get_max_threads();
@@ -60,8 +31,10 @@ NodeFeatures ExtractNodeFeatures(SDBG& dbg) {
         uint64_t total         = 0;
         uint64_t n_tips        = 0;
         uint64_t n_branch      = 0;
-        double   min_ratio_sum = 0.0;
-        double   max_ratio_sum = 0.0;
+        double   max_ratio_sum  = 0.0;
+        double   jump_ratio_sum = 0.0;
+        double   global_max_r   = -std::numeric_limits<double>::max();
+        double   global_max_mag = -std::numeric_limits<double>::max();
     };
     std::vector<ThrAcc> acc(nthreads);
 
@@ -90,16 +63,21 @@ NodeFeatures ExtractNodeFeatures(SDBG& dbg) {
         if (outdeg >= 2) {
             uint64_t outs[8];
             int od = dbg.OutgoingEdges(i, outs);
-            double min_r =  std::numeric_limits<double>::max();
-            double max_r = -std::numeric_limits<double>::max();
+            double max_r   = -std::numeric_limits<double>::max();
+            double max_mag = -std::numeric_limits<double>::max();
             for (int j = 0; j < od; ++j) {
                 const double mul_j = dbg.EdgeMultiplicity(outs[j]);
                 const double r     = mul_j > 0.0 ? mul / mul_j : mul;
-                if (r < min_r) min_r = r;
-                if (r > max_r) max_r = r;
+                const double hi    = (mul >= mul_j) ? mul : mul_j;
+                const double lo    = (mul >= mul_j) ? mul_j : mul;
+                const double mag   = (lo > 0.0) ? hi / lo : hi;
+                if (r   > max_r)   max_r   = r;
+                if (mag > max_mag) max_mag = mag;
             }
-            a.min_ratio_sum += min_r;
-            a.max_ratio_sum += max_r;
+            a.max_ratio_sum  += max_r;
+            a.jump_ratio_sum += max_mag;
+            if (max_r   > a.global_max_r)   a.global_max_r   = max_r;
+            if (max_mag > a.global_max_mag) a.global_max_mag = max_mag;
             ++a.n_branch;
         }
     }
@@ -111,8 +89,10 @@ NodeFeatures ExtractNodeFeatures(SDBG& dbg) {
     uint64_t total     = 0;
     uint64_t n_tips    = 0;
     uint64_t n_branch  = 0;
-    double   min_r_sum = 0.0;
-    double   max_r_sum = 0.0;
+    double   max_r_sum    = 0.0;
+    double   jump_r_sum   = 0.0;
+    double   global_max_r   = -std::numeric_limits<double>::max();
+    double   global_max_mag = -std::numeric_limits<double>::max();
 
     for (const ThrAcc& a : acc) {
         if (a.total == 0) continue;
@@ -121,53 +101,29 @@ NodeFeatures ExtractNodeFeatures(SDBG& dbg) {
         mult_sum  += a.mult_sum;
         total     += a.total;
         n_tips    += a.n_tips;
-        n_branch  += a.n_branch;
-        min_r_sum += a.min_ratio_sum;
-        max_r_sum += a.max_ratio_sum;
+        n_branch     += a.n_branch;
+        max_r_sum    += a.max_ratio_sum;
+        jump_r_sum   += a.jump_ratio_sum;
+        if (a.global_max_r   > global_max_r)   global_max_r   = a.global_max_r;
+        if (a.global_max_mag > global_max_mag) global_max_mag = a.global_max_mag;
     }
 
     if (total == 0) return NodeFeatures{};
 
     const double C_real    = n_branch > 0 ? max_r_sum / n_branch : 0.0;
     const double mean_mult = mult_sum / total;
-    const double m_star    = ComputeErrorThreshold(C_real, mean_mult, kmer_k);
-
-    // ---- Pass 2: count prominent jumps using adaptive threshold m* ----
-    uint64_t n_jumps = 0;
-    if (m_star > 0.0) {
-        std::vector<uint64_t> jump_acc(nthreads, 0);
-
-#pragma omp parallel for schedule(dynamic, 512)
-        for (uint64_t i = 0; i < dbg.size(); ++i) {
-            if (!dbg.IsValidEdge(i)) continue;
-            const int outdeg = dbg.EdgeOutdegree(i);
-            if (outdeg == 0) continue;
-#ifdef _OPENMP
-            const int tid = omp_get_thread_num();
-#else
-            const int tid = 0;
-#endif
-            const double mul = dbg.EdgeMultiplicity(i);
-            uint64_t outs[8];
-            int od = dbg.OutgoingEdges(i, outs);
-            for (int j = 0; j < od; ++j) {
-                const double mul_j = dbg.EdgeMultiplicity(outs[j]);
-                if (std::min(mul, mul_j) <= m_star)
-                    ++jump_acc[tid];
-            }
-        }
-        for (uint64_t v : jump_acc) n_jumps += v;
-    }
 
     NodeFeatures nf = {};
     nf.mult_min              = (mult_min ==  std::numeric_limits<double>::max()) ? 0.0 : mult_min;
     nf.mult_max              = (mult_max == -std::numeric_limits<double>::max()) ? 0.0 : mult_max;
     nf.mult_mean             = mean_mult;
-    nf.n_prominent_jumps     = n_jumps;
+    nf.n_reads               = total_reads;
+    nf.n_kmers               = total;
     nf.n_tips                = n_tips;
-    nf.mean_min_branch_ratio = n_branch > 0 ? min_r_sum / n_branch : 0.0;
+    nf.n_branch_nodes        = n_branch;
     nf.mean_max_branch_ratio = C_real;
-    nf.error_threshold       = m_star;
+    nf.max_branch_ratio      = (n_branch > 0 && global_max_r   != -std::numeric_limits<double>::max()) ? global_max_r   : 0.0;
+    nf.mean_jump_ratio       = (n_branch > 0 && global_max_mag != -std::numeric_limits<double>::max()) ? jump_r_sum / n_branch : 0.0;
     return nf;
 }
 
@@ -175,12 +131,12 @@ NodeFeatures ExtractNodeFeatures(SDBG& dbg) {
 // Top-level driver
 // ---------------------------------------------------------------------------
 
-TopoFeatures RunExtraction(SDBG& dbg, const ExtractionOptions& /*opts*/) {
+TopoFeatures RunExtraction(SDBG& dbg, const ExtractionOptions& opts) {
     using Clock = std::chrono::steady_clock;
     auto t0 = Clock::now();
 
     TopoFeatures tf = {};
-    tf.node = ExtractNodeFeatures(dbg);
+    tf.node = ExtractNodeFeatures(dbg, opts.total_reads);
 
     auto t1 = Clock::now();
     tf.timing.node_ms =

@@ -141,6 +141,28 @@ static void WriteLibFile(const std::string& reads1,
     fclose(f);
 }
 
+// Count reads in a FASTQ file (plain or .gz) without loading it fully.
+// Each read = 4 lines, so count newlines / 4.
+static uint64_t CountFastqReads(const std::string& path) {
+    bool gz = path.size() > 3 && path.compare(path.size() - 3, 3, ".gz") == 0;
+    FILE* f = nullptr;
+    if (gz) {
+        std::string cmd = "gzip -cd \"" + path + "\"";
+        f = popen(cmd.c_str(), "r");
+    } else {
+        f = fopen(path.c_str(), "r");
+    }
+    if (!f) return 0;
+    uint64_t newlines = 0;
+    char buf[65536];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0)
+        for (size_t i = 0; i < n; ++i)
+            if (buf[i] == '\n') ++newlines;
+    if (gz) pclose(f); else fclose(f);
+    return newlines / 4;
+}
+
 // Invoke megahit_core {buildlib, read2sdbg} and return the SDBG prefix.
 static std::string BuildSdbgFromReads(const std::string& reads1,
                                       const std::string& reads2,  // empty = SE
@@ -224,7 +246,8 @@ static void PrintUsage(const char* prog) {
         << "  --mem        Memory for SDBG build in GB, reads mode only (default: 90% of RAM)\n"
         << "  --min-count  Min k-mer frequency for SDBG build (default 1)\n"
         << "  --kmer-size  k-mer length for SDBG build (default 21, must be odd)\n"
-        << "  --keep-graph Keep the temporary SDBG directory after extraction\n";
+        << "  --keep-graph Keep the temporary SDBG directory after extraction\n"
+        << "  --read-count Total read count (R1+R2); auto-detected in --reads mode, required for --graph mode\n";
 }
 
 // ---------------------------------------------------------------------------
@@ -242,6 +265,7 @@ int main(int argc, char** argv) {
     int     min_count  = 1;
     int     kmer_size  = 21;
     bool    keep_graph = false;
+    uint64_t read_count_override = 0;  // set via --read-count for --graph mode
 
     for (int i = 1; i < argc; ++i) {
         std::string arg(argv[i]);
@@ -254,6 +278,7 @@ int main(int argc, char** argv) {
         else if (arg == "--min-count" && i + 1 < argc) min_count    = std::atoi(argv[++i]);
         else if (arg == "--kmer-size"  && i + 1 < argc) kmer_size    = std::atoi(argv[++i]);
         else if (arg == "--keep-graph")                  keep_graph   = true;
+        else if (arg == "--read-count"  && i + 1 < argc) read_count_override = std::strtoull(argv[++i], nullptr, 10);
         else { std::cerr << "Unknown argument: " << arg << "\n"; PrintUsage(argv[0]); return 1; }
     }
 
@@ -275,11 +300,16 @@ int main(int argc, char** argv) {
     std::cerr << "Threads: 1 (OpenMP not available)\n";
 #endif
 
-    // ----- reads mode: build SDBG, remember to clean up -----
+    // ----- reads mode: build SDBG, count reads, remember to clean up -----
     bool owns_tmp = false;
     std::string tmp_dir;
 
     if (!reads_file.empty()) {
+        std::cerr << "Counting reads ...\n";
+        uint64_t r1 = CountFastqReads(reads_file);
+        uint64_t r2 = reads2_file.empty() ? 0 : CountFastqReads(reads2_file);
+        opts.total_reads = r1 + r2;
+        std::cerr << "  R1: " << r1 << "  R2: " << r2 << "  total: " << opts.total_reads << "\n";
         const std::string bin_dir = GetBinaryDir(argv[0]);
         tmp_dir   = bin_dir + PATH_SEP + "megahit_topo_tmp_" + std::to_string(
 #ifdef _WIN32
@@ -300,6 +330,9 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
+
+    // --read-count override (for --graph mode or to correct the auto-count)
+    if (read_count_override > 0) opts.total_reads = read_count_override;
 
     // ----- load SDBG -----
     SDBG dbg;

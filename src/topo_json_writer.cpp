@@ -12,14 +12,16 @@ void WriteFeatures(const TopoFeatures& f, const std::string& output_path) {
     out << "{\n";
 
     out << "  \"node\": {\n";
-    out << "    \"n_prominent_jumps\": "      << f.node.n_prominent_jumps      << ",\n";
+    out << "    \"n_reads\": "               << f.node.n_reads               << ",\n";
+    out << "    \"n_kmers\": "               << f.node.n_kmers               << ",\n";
     out << "    \"mult_min\": "               << f.node.mult_min               << ",\n";
     out << "    \"mult_max\": "               << f.node.mult_max               << ",\n";
     out << "    \"mult_mean\": "              << f.node.mult_mean              << ",\n";
-    out << "    \"mean_min_branch_ratio\": "  << f.node.mean_min_branch_ratio  << ",\n";
     out << "    \"mean_max_branch_ratio\": "  << f.node.mean_max_branch_ratio  << ",\n";
+    out << "    \"max_branch_ratio\": "       << f.node.max_branch_ratio       << ",\n";
+    out << "    \"mean_jump_ratio\": "        << f.node.mean_jump_ratio        << ",\n";
     out << "    \"n_tips\": "                 << f.node.n_tips                 << ",\n";
-    out << "    \"error_threshold\": "         << f.node.error_threshold         << "\n";
+    out << "    \"n_branch_nodes\": "          << f.node.n_branch_nodes          << "\n";
     out << "  },\n";
 
     out << "  \"timing\": {\n";

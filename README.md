@@ -2,40 +2,24 @@
   <img src="icon.png" alt="metaTopoGraph" width="350"/>
 </p>
 
-Extracts 7 de Bruijn graph topology features from a MEGAHIT SDBG at k=21 by default.
-Runs as a standalone binary from raw reads — builds the SDBG internally, extracts features, then cleans up.
+Extracts de Bruijn graph topology features from metagenomic reads.
+Builds a MEGAHIT SDBG internally from raw reads, extracts features in a single pass, then cleans up.
 
-## Features extracted
-
-A single full scan over all edges in the SDBG produces:
+## Features
 
 ```
-n_prominent_jumps     — number of directed edge transitions where the multiplicity ratio
-                        between adjacent edges is >= 3.0 (JUMP_THRESHOLD). Encodes error
-                        branch density and coverage unevenness.
-
-mult_min              — minimum edge multiplicity across the entire graph.
-mult_max              — maximum edge multiplicity. High values indicate repeated k-mers
-                        (rRNA operons, transposons, conserved genes).
-mult_mean             — mean edge multiplicity. Depressed below true coverage by the
-                        presence of error k-mers at multiplicity ~1.
-
-mean_min_branch_ratio — at branching nodes (out-degree >= 2): mean of the minimum
-                        mult[source] / mult[outgoing_j] ratio across all outgoing edges.
-                        Near 1.0 means the real path is always present at branches.
-
-mean_max_branch_ratio — at branching nodes (out-degree >= 2): mean of the maximum
-                        mult[source] / mult[outgoing_j] ratio. Approximates the real
-                        genome coverage C, because the dominant real path consistently
-                        wins against the error branches (mult ~1).
-
-n_tips                — edges with in-degree == 0 or out-degree == 0. Caused by
-                        sequencing errors near read boundaries or genuine contig ends.
+n_reads               total reads provided (R1 + R2)
+n_kmers               total valid k-mer edges in the graph (E_real + E_err)
+mult_min              minimum edge multiplicity
+mult_max              maximum edge multiplicity
+mult_mean             mean edge multiplicity
+mean_min_branch_ratio mean of min(mul_i / mul_out_j) at branching nodes (out-degree >= 2)
+mean_max_branch_ratio mean of max(mul_i / mul_out_j) at branching nodes; approximates real genome coverage
+max_branch_ratio      global maximum of (mul_i / mul_out_j) across all branches
+min_branch_ratio      global minimum of (mul_i / mul_out_j) across all branches
+n_tips                edges with in-degree == 0 or out-degree == 0
+n_branch_nodes        edges with out-degree >= 2
 ```
-
-`mean_max_branch_ratio` and `mult_mean` together allow a Bayesian estimate of the
-per-base sequencing error rate and the multiplicity threshold below which an edge is
-more likely erroneous than real — with no external calibration needed.
 
 ## Build
 
@@ -63,39 +47,43 @@ Requires: CMake >= 3.5, C++14 compiler, zlib, OpenMP.
 
 ```bash
 # single-end
-./megahit_topo --reads sample.fa --output features.json [--threads 8]
+./megahit_topo --reads sample.fa --output features.json
 
 # paired-end
-./megahit_topo --reads R1.fq.gz --reads2 R2.fq.gz --output features.json [--threads 8]
+./megahit_topo --reads R1.fq.gz --reads2 R2.fq.gz --output features.json
+
+# pre-built SDBG
+./megahit_topo --graph sdbg_prefix --output features.json --read-count 2000000
 ```
 
 ```
---reads       R1 (or single-end) FASTA/FASTQ reads file (required)
---reads2      R2 FASTA/FASTQ file for paired-end input (optional)
---output      Output JSON path (required)
---threads     OpenMP threads (default: all cores)
---mem         Memory for SDBG build in GB (default: 90% of system RAM)
---min-count   Min k-mer frequency; use 2 to filter most error k-mers at coverage >= 5x (default: 1)
---kmer-size   k-mer length (default: 21, must be odd)
---keep-graph  Keep the temporary SDBG directory after extraction
+--reads        R1 (or single-end) FASTA/FASTQ reads file
+--reads2       R2 FASTA/FASTQ file for paired-end input
+--output       Output JSON path (required)
+--threads      OpenMP threads (default: all cores)
+--mem          Memory for SDBG build in GB (default: 90% of RAM)
+--min-count    Min k-mer frequency (default: 1)
+--kmer-size    k-mer length (default: 21, must be odd)
+--keep-graph   Keep the temporary SDBG directory after extraction
+--read-count   Total read count for --graph mode (auto-detected in --reads mode)
 ```
-
-`megahit_core_no_hw_accel` (or `megahit_core`) must be present in the same directory as
-`megahit_topo`. The temporary SDBG is written to `<binary_dir>/megahit_topo_tmp_<pid>/`
-and deleted on exit.
 
 ## Output format
 
 ```json
 {
   "node": {
-    "n_prominent_jumps": 1591614,
+    "n_reads": 2000000,
+    "n_kmers": 20971520,
     "mult_min": 1,
     "mult_max": 1231,
     "mult_mean": 12.4418,
     "mean_min_branch_ratio": 0.982312,
     "mean_max_branch_ratio": 28.9574,
-    "n_tips": 409078
+    "max_branch_ratio": 1231.0,
+    "min_branch_ratio": 1.0,
+    "n_tips": 409078,
+    "n_branch_nodes": 512345
   },
   "timing": {
     "node_ms": 5136.02
@@ -107,10 +95,12 @@ and deleted on exit.
 
 ```
 CMakeLists.txt
-libs/megahit/            upstream MEGAHIT (SDBG data structures, read-only)
+libs/megahit/              upstream MEGAHIT (SDBG data structures, read-only)
 src/
-  topo_features.h        NodeFeatures and TopoFeatures structs
-  topo_extractor.h/.cpp  single-pass full-scan extraction
-  topo_json_writer.h/.cpp  writes features.json
-  main.cpp               CLI entry point
+  topo_features.h          NodeFeatures and TopoFeatures structs
+  topo_extractor.h/.cpp    single-pass full-scan extraction
+  topo_json_writer.h/.cpp  JSON output
+  main.cpp                 CLI entry point
+  README.md                implementation reference
+  error_threshold_derivation.md  derivation of the Bayesian error threshold
 ```
