@@ -18,7 +18,8 @@ void WriteFeatures(const TopoFeatures& f, const std::string& output_path) {
     out << "    \"mult_mean\": "              << f.node.mult_mean              << ",\n";
     out << "    \"mean_min_branch_ratio\": "  << f.node.mean_min_branch_ratio  << ",\n";
     out << "    \"mean_max_branch_ratio\": "  << f.node.mean_max_branch_ratio  << ",\n";
-    out << "    \"n_tips\": "                 << f.node.n_tips                 << "\n";
+    out << "    \"n_tips\": "                 << f.node.n_tips                 << ",\n";
+    out << "    \"error_threshold\": "         << f.node.error_threshold         << "\n";
     out << "  },\n";
 
     out << "  \"timing\": {\n";

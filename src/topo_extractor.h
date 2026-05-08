@@ -4,9 +4,6 @@
 #include "sdbg/sdbg.h"
 #include "topo_features.h"
 
-// Multiplicity ratio between adjacent edges that counts as a prominent jump.
-constexpr double JUMP_THRESHOLD = 3.0;
-
 // Options (reserved for future use).
 struct ExtractionOptions {};
 
