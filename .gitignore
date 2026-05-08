@@ -3,3 +3,5 @@ why_important
 analysis_README.md
 features.json
 build/
+plan/
+build.sh

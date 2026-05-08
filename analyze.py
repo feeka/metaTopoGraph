@@ -20,7 +20,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from scipy.stats import beta as beta_dist
 from scipy.cluster.hierarchy import linkage, leaves_list
 from scipy.spatial.distance import squareform
 
@@ -29,28 +28,14 @@ from scipy.spatial.distance import squareform
 # ---------------------------------------------------------------------------
 
 FEATURES = [
-    # histogram (5)
-    "valley_depth",
-    "mult_1_fraction",
-    "mean_node_multiplicity",
-    "multiplicity_cv",
-    "n_signal_modes",
-    # node (6)
-    "tip_density",
-    "branching_node_fraction",
-    "linear_node_fraction",
-    "high_degree_node_fraction",
-    "mult_at_tips",
-    "mult_at_branches",
-    # walk (4)
-    "mean_tip_length",
-    "bubble_density",
-    "error_bubble_fraction",
-    "balanced_bubble_fraction",
+    "n_prominent_jumps",
+    "mult_min",
+    "mult_max",
+    "mult_mean",
+    "mean_min_branch_ratio",
+    "mean_max_branch_ratio",
+    "n_tips",
 ]
-
-# Raw count columns kept for confidence interval computation only.
-COUNT_COLS = ["n_tips_walked", "n_branching_sampled", "n_bubbles_found"]
 
 # ---------------------------------------------------------------------------
 # I/O
@@ -63,10 +48,9 @@ def load_data(input_dir: Path) -> pd.DataFrame:
         with open(f) as fh:
             d = json.load(fh)
         row = {"biome": biome}
-        for section in ("histogram", "hist", "node", "walk"):
-            if section in d:
-                for k, v in d[section].items():
-                    row[k] = v
+        if "node" in d:
+            for k, v in d["node"].items():
+                row[k] = v
         rows.append(row)
     if not rows:
         sys.exit(f"No features_*.json files found in {input_dir}")
@@ -124,49 +108,7 @@ def compute_outliers(df: pd.DataFrame) -> pd.DataFrame:
                 })
     return pd.DataFrame(records)
 
-# ---------------------------------------------------------------------------
-# 4. Sampling reliability (exact binomial confidence intervals)
-# ---------------------------------------------------------------------------
 
-def clopper_pearson(k: int, n: int, alpha: float = 0.05):
-    """Clopper-Pearson exact interval via the beta-binomial relationship."""
-    if n == 0:
-        return 0.0, 1.0
-    lo = beta_dist.ppf(alpha / 2,       k,     n - k + 1) if k > 0 else 0.0
-    hi = beta_dist.ppf(1 - alpha / 2,   k + 1, n - k)     if k < n else 1.0
-    return lo, hi
-
-def compute_sampling_reliability(df: pd.DataFrame) -> pd.DataFrame:
-    records = []
-    for biome in df.index:
-        n_branching = int(df.loc[biome, "n_branching_sampled"]) if "n_branching_sampled" in df.columns else 0
-        n_bubbles   = int(df.loc[biome, "n_bubbles_found"])     if "n_bubbles_found"     in df.columns else 0
-
-        # bubble_density: proportion of branching edges that produced a bubble
-        bd_val  = df.loc[biome, "bubble_density"]
-        k_bd    = n_bubbles
-        lo, hi  = clopper_pearson(k_bd, n_branching)
-        records.append({"biome": biome, "feature": "bubble_density",
-                         "value": bd_val, "ci_lo": lo, "ci_hi": hi,
-                         "n": n_branching, "k": k_bd})
-
-        # error_bubble_fraction: proportion of bubbles that are error-type
-        ef_val  = df.loc[biome, "error_bubble_fraction"]
-        k_err   = round(ef_val * n_bubbles)
-        lo, hi  = clopper_pearson(k_err, n_bubbles)
-        records.append({"biome": biome, "feature": "error_bubble_fraction",
-                         "value": ef_val, "ci_lo": lo, "ci_hi": hi,
-                         "n": n_bubbles, "k": k_err})
-
-        # balanced_bubble_fraction: proportion of bubbles that are balanced
-        bf_val  = df.loc[biome, "balanced_bubble_fraction"]
-        k_bal   = round(bf_val * n_bubbles)
-        lo, hi  = clopper_pearson(k_bal, n_bubbles)
-        records.append({"biome": biome, "feature": "balanced_bubble_fraction",
-                         "value": bf_val, "ci_lo": lo, "ci_hi": hi,
-                         "n": n_bubbles, "k": k_bal})
-
-    return pd.DataFrame(records)
 
 # ---------------------------------------------------------------------------
 # Plots
@@ -317,10 +259,6 @@ def main():
     print("Identifying outliers ...")
     outliers = compute_outliers(df)
     outliers.to_csv(output_dir / "outliers.csv", index=False)
-
-    print("Computing sampling reliability ...")
-    reliability = compute_sampling_reliability(df)
-    reliability.to_csv(output_dir / "sampling_reliability.csv", index=False)
 
     # ---- Plots ----
     sns.set_theme(style="whitegrid")

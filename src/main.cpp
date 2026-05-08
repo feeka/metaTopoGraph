@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -218,7 +219,7 @@ static void PrintUsage(const char* prog) {
         << "  --reads      R1 (or SE) FASTA/FASTQ reads file\n"
         << "  --reads2     R2 FASTA/FASTQ file (paired-end only)\n"
         << "  --output     Output JSON file path\n"
-        << "  --sample     Edges to sample for node/walk/bubble phases (default 100000)\n"
+        << ""
         << "  --threads    OpenMP threads (default: all available)\n"
         << "  --mem        Memory for SDBG build in GB, reads mode only (default: 90% of RAM)\n"
         << "  --min-count  Min k-mer frequency for SDBG build (default 2)\n"
@@ -248,7 +249,6 @@ int main(int argc, char** argv) {
         else if (arg == "--reads"     && i + 1 < argc) reads_file   = argv[++i];
         else if (arg == "--reads2"    && i + 1 < argc) reads2_file  = argv[++i];
         else if (arg == "--output"    && i + 1 < argc) output_path  = argv[++i];
-        else if (arg == "--sample"    && i + 1 < argc) opts.sample_size = static_cast<uint64_t>(std::atoll(argv[++i]));
         else if (arg == "--threads"   && i + 1 < argc) n_threads    = std::atoi(argv[++i]);
         else if (arg == "--mem"       && i + 1 < argc) mem_gb       = std::atof(argv[++i]);
         else if (arg == "--min-count" && i + 1 < argc) min_count    = std::atoi(argv[++i]);
@@ -316,7 +316,7 @@ int main(int argc, char** argv) {
     // ----- extract -----
     TopoFeatures features;
     try {
-        std::cerr << "Extracting features (sample_size=" << opts.sample_size << ") ...\n";
+        std::cerr << "Extracting features ...\n";
         features = RunExtraction(dbg, opts);
     } catch (const std::exception& e) {
         std::cerr << "Error during extraction: " << e.what() << "\n";
@@ -324,10 +324,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    std::cerr << "  histogram:  " << features.timing.histogram_ms << " ms\n";
-    std::cerr << "  node:       " << features.timing.node_ms      << " ms\n";
-    std::cerr << "  tip walk:   " << features.timing.walk_ms      << " ms\n";
-    std::cerr << "  bubbles:    " << features.timing.bubble_ms    << " ms\n";
+    std::cerr << "  node:  " << features.timing.node_ms << " ms\n";
 
     // ----- write output -----
     try {
