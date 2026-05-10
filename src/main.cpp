@@ -230,24 +230,28 @@ static std::string BuildSdbgFromReads(const std::string& reads1,
 static void PrintUsage(const char* prog) {
     std::cerr
         << "Usage:\n"
-        << "  From pre-built SDBG:\n"
-        << "    " << prog << " --graph <sdbg_prefix> --output <out.json> [options]\n\n"
-        << "  From single-end reads:\n"
+        << "  From single-end reads (graph topology only):\n"
         << "    " << prog << " --reads <reads.fa/fq[.gz]> --output <out.json> [options]\n\n"
-        << "  From paired-end reads:\n"
+        << "  From paired-end reads (graph topology only):\n"
         << "    " << prog << " --reads <R1.fq.gz> --reads2 <R2.fq.gz> --output <out.json> [options]\n\n"
-        << "Options:\n"
-        << "  --graph      SDBG file prefix\n"
+        << "  From reads + reference (topology + k-mer features + labels):\n"
+        << "    " << prog << " --reads <R1.fq.gz> --reads2 <R2.fq.gz>\n"
+        << "          --ref-fasta <ref.fa> --output <out.json> [options]\n\n"
+        << "  From pre-built SDBG (topology only):\n"
+        << "    " << prog << " --graph <sdbg_prefix> --output <out.json> --read-count N\n\n"
+        << "Required:\n"
         << "  --reads      R1 (or SE) FASTA/FASTQ reads file\n"
-        << "  --reads2     R2 FASTA/FASTQ file (paired-end only)\n"
-        << "  --output     Output JSON file path\n"
-        << ""
+        << "  --output     Output JSON file path\n\n"
+        << "Optional:\n"
+        << "  --reads2     R2 FASTA/FASTQ file (paired-end)\n"
+        << "  --ref-fasta  Reference FASTA for jellyfish k-mer classification (enables k-mer features + labels)\n"
+        << "  --graph      Pre-built SDBG file prefix (alternative to --reads for topology-only mode)\n"
         << "  --threads    OpenMP threads (default: all available)\n"
-        << "  --mem        Memory for SDBG build in GB, reads mode only (default: 90% of RAM)\n"
-        << "  --min-count  Min k-mer frequency for SDBG build (default 1)\n"
-        << "  --kmer-size  k-mer length for SDBG build (default 21, must be odd)\n"
+        << "  --mem        Memory for SDBG build in GB (default: 90% of RAM)\n"
+        << "  --min-count  Min k-mer frequency for SDBG build (default: 1)\n"
+        << "  --kmer-size  k-mer length (default: 21, must be odd)\n"
         << "  --keep-graph Keep the temporary SDBG directory after extraction\n"
-        << "  --read-count Total read count (R1+R2); auto-detected in --reads mode, required for --graph mode\n";
+        << "  --read-count Total read count (R1+R2); auto-detected in --reads mode\n";
 }
 
 // ---------------------------------------------------------------------------
@@ -258,6 +262,7 @@ int main(int argc, char** argv) {
     std::string graph_prefix;
     std::string reads_file;
     std::string reads2_file;
+    std::string ref_fasta;
     std::string output_path;
     ExtractionOptions opts;
     int     n_threads  = 0;
@@ -269,16 +274,17 @@ int main(int argc, char** argv) {
 
     for (int i = 1; i < argc; ++i) {
         std::string arg(argv[i]);
-        if      (arg == "--graph"     && i + 1 < argc) graph_prefix = argv[++i];
-        else if (arg == "--reads"     && i + 1 < argc) reads_file   = argv[++i];
-        else if (arg == "--reads2"    && i + 1 < argc) reads2_file  = argv[++i];
-        else if (arg == "--output"    && i + 1 < argc) output_path  = argv[++i];
-        else if (arg == "--threads"   && i + 1 < argc) n_threads    = std::atoi(argv[++i]);
-        else if (arg == "--mem"       && i + 1 < argc) mem_gb       = std::atof(argv[++i]);
-        else if (arg == "--min-count" && i + 1 < argc) min_count    = std::atoi(argv[++i]);
+        if      (arg == "--graph"      && i + 1 < argc) graph_prefix = argv[++i];
+        else if (arg == "--reads"      && i + 1 < argc) reads_file   = argv[++i];
+        else if (arg == "--reads2"     && i + 1 < argc) reads2_file  = argv[++i];
+        else if (arg == "--ref-fasta"  && i + 1 < argc) ref_fasta    = argv[++i];
+        else if (arg == "--output"     && i + 1 < argc) output_path  = argv[++i];
+        else if (arg == "--threads"    && i + 1 < argc) n_threads    = std::atoi(argv[++i]);
+        else if (arg == "--mem"        && i + 1 < argc) mem_gb       = std::atof(argv[++i]);
+        else if (arg == "--min-count"  && i + 1 < argc) min_count    = std::atoi(argv[++i]);
         else if (arg == "--kmer-size"  && i + 1 < argc) kmer_size    = std::atoi(argv[++i]);
         else if (arg == "--keep-graph")                  keep_graph   = true;
-        else if (arg == "--read-count"  && i + 1 < argc) read_count_override = std::strtoull(argv[++i], nullptr, 10);
+        else if (arg == "--read-count" && i + 1 < argc) read_count_override = std::strtoull(argv[++i], nullptr, 10);
         else { std::cerr << "Unknown argument: " << arg << "\n"; PrintUsage(argv[0]); return 1; }
     }
 
@@ -334,6 +340,20 @@ int main(int argc, char** argv) {
     // --read-count override (for --graph mode or to correct the auto-count)
     if (read_count_override > 0) opts.total_reads = read_count_override;
 
+    // Wire k-mer feature options (only used in --reads mode; ignored for --graph).
+    if (!ref_fasta.empty() && !reads_file.empty()) {
+        opts.ref_fasta  = ref_fasta;
+        opts.reads1     = reads_file;
+        opts.reads2     = reads2_file;
+        opts.tmp_dir    = tmp_dir;
+        opts.kmer_k     = kmer_size;
+#ifdef _OPENMP
+        opts.n_threads  = n_threads > 0 ? n_threads : omp_get_max_threads();
+#else
+        opts.n_threads  = n_threads > 0 ? n_threads : 1;
+#endif
+    }
+
     // ----- load SDBG -----
     SDBG dbg;
     try {
@@ -358,6 +378,8 @@ int main(int argc, char** argv) {
     }
 
     std::cerr << "  node:  " << features.timing.node_ms << " ms\n";
+    if (features.has_kmer_features)
+        std::cerr << "  kmer:  " << features.timing.kmer_ms << " ms\n";
 
     // ----- write output -----
     try {
