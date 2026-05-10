@@ -23,21 +23,21 @@ cd metaTopoGraph
 cmake -S libs/megahit -B libs/megahit/build -DCMAKE_BUILD_TYPE=Release
 make -C libs/megahit/build -j$(nproc)
 
-# build megahit_topo
+# build metaTopoGraph
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 make -C build -j$(nproc)
 ```
 
-The `megahit_topo` binary will be at `build/megahit_topo`.
+The `metaTopoGraph` binary will be at `build/metaTopoGraph`.
 
 ## Usage
 
 ```bash
 # graph features only
-megahit_topo --reads R1.fq.gz --reads2 R2.fq.gz --output features.json
+metaTopoGraph --reads R1.fq.gz --reads2 R2.fq.gz --output features.json
 
 # graph features + k-mer error features + labels
-megahit_topo --reads R1.fq.gz --reads2 R2.fq.gz \
+metaTopoGraph --reads R1.fq.gz --reads2 R2.fq.gz \
              --ref-fasta reference.fa --output features.json
 ```
 

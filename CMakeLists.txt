@@ -43,9 +43,9 @@ set(TOPO_SOURCES
     src/main.cpp
 )
 
-add_executable(megahit_topo ${TOPO_SOURCES} ${SDBG_SOURCE})
+add_executable(metaTopoGraph ${TOPO_SOURCES} ${SDBG_SOURCE})
 
-target_link_libraries(megahit_topo ${ZLIB_LIBRARIES})
+target_link_libraries(metaTopoGraph ${ZLIB_LIBRARIES})
 if (OpenMP_CXX_FOUND)
-    target_link_libraries(megahit_topo OpenMP::OpenMP_CXX)
+    target_link_libraries(metaTopoGraph OpenMP::OpenMP_CXX)
 endif ()
