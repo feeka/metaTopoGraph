@@ -2,6 +2,8 @@
   <img src="icon.png" alt="metaTopoGraph" width="350"/>
 </p>
 
+# metaTopoGraph
+
 A self-contained C++ tool that extracts de Bruijn graph topology features and jellyfish-based k-mer error features from metagenomic reads.
 Given raw reads (and optionally a reference FASTA), it builds a MEGAHIT succinct de Bruijn graph, runs feature extraction in a single parallel pass, optionally calls jellyfish to classify k-mers as sequencing errors or true genomic sequence, computes jointly optimised prediction thresholds, and cleans up all temporary files on exit.
 
