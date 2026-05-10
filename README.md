@@ -1,6 +1,4 @@
-<p align="left">
-  <img src="icon.png" alt="metaTopoGraph" width="350"/>
-</p>
+![metaTopoGraph](icon.png)
 
 # metaTopoGraph
 
