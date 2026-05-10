@@ -1,5 +1,5 @@
 <p align="left">
-  <img src="icon.png" alt="metaTopoGraph" width="350"/>
+  <img src="icon.png" alt="metaTopoGraph" width="250"/>
 </p>
 
 # metaTopoGraph
