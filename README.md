@@ -17,10 +17,18 @@ All temp files are cleaned up automatically.
 
 ```bash
 git clone --recurse-submodules https://github.com/feeka/metaTopoGraph.git
-bash build.sh
+cd metaTopoGraph
+
+# build MEGAHIT
+cmake -S libs/megahit -B libs/megahit/build -DCMAKE_BUILD_TYPE=Release
+make -C libs/megahit/build -j$(nproc)
+
+# build megahit_topo
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+make -C build -j$(nproc)
 ```
 
-Binaries land in `~/metaTopoGraph-build/`. `build.sh` handles MEGAHIT and `megahit_topo` in one shot.
+The `megahit_topo` binary will be at `build/megahit_topo`.
 
 ## Usage
 
