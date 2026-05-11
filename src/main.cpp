@@ -251,6 +251,7 @@ static void PrintUsage(const char* prog) {
         << "  --min-count  Min k-mer frequency for SDBG build (default: 1)\n"
         << "  --kmer-size  k-mer length (default: 21, must be odd)\n"
         << "  --keep-graph Keep the temporary SDBG directory after extraction\n"
+        << "  --tmp-dir    Directory for SDBG/jellyfish temp files (default: next to binary). Use /dev/shm for speed.\n"
         << "  --read-count Total read count (R1+R2); auto-detected in --reads mode\n";
 }
 
@@ -271,6 +272,7 @@ int main(int argc, char** argv) {
     int     kmer_size  = 21;
     bool    keep_graph = false;
     uint64_t read_count_override = 0;  // set via --read-count for --graph mode
+    std::string user_tmp_dir;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg(argv[i]);
@@ -285,6 +287,7 @@ int main(int argc, char** argv) {
         else if (arg == "--kmer-size"  && i + 1 < argc) kmer_size    = std::atoi(argv[++i]);
         else if (arg == "--keep-graph")                  keep_graph   = true;
         else if (arg == "--read-count" && i + 1 < argc) read_count_override = std::strtoull(argv[++i], nullptr, 10);
+        else if (arg == "--tmp-dir"    && i + 1 < argc) user_tmp_dir = argv[++i];
         else { std::cerr << "Unknown argument: " << arg << "\n"; PrintUsage(argv[0]); return 1; }
     }
 
@@ -317,13 +320,16 @@ int main(int argc, char** argv) {
         opts.total_reads = r1 + r2;
         std::cerr << "  R1: " << r1 << "  R2: " << r2 << "  total: " << opts.total_reads << "\n";
         const std::string bin_dir = GetBinaryDir(argv[0]);
-        tmp_dir   = bin_dir + PATH_SEP + "megahit_topo_tmp_" + std::to_string(
+        {
+            const std::string& base = user_tmp_dir.empty() ? bin_dir : user_tmp_dir;
+            tmp_dir = base + PATH_SEP + "megahit_topo_tmp_" + std::to_string(
 #ifdef _WIN32
                         static_cast<unsigned>(GetCurrentProcessId())
 #else
                         static_cast<unsigned>(getpid())
 #endif
                     );
+        }
         owns_tmp = true;
         try {
             graph_prefix = BuildSdbgFromReads(reads_file, reads2_file,
